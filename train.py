@@ -32,6 +32,7 @@ MODEL_PROFILES: dict[str, dict[str, float | int]] = {
     "mini": {"hidden_size": 128, "epochs": 128, "batch_size": 256, "learning_rate": 0.008},
     "normal": {"hidden_size": 512, "epochs": 256, "batch_size": 256, "learning_rate": 0.005},
     "pro": {"hidden_size": 2048, "epochs": 512, "batch_size": 512, "learning_rate": 0.003},
+    "max": {"hidden_size": 4096, "epochs": 1024, "batch_size": 512, "learning_rate": 0.002},
 }
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
@@ -40,7 +41,7 @@ ProgressCallback = Callable[[str, dict[str, Any]], None]
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Trainiere ein einfaches MLP fuer Ziffernerkennung.")
     parser.add_argument("--no-ui", action="store_true", help="Kein GUI-Fenster, direkt im Terminal trainieren.")
-    parser.add_argument("--size", choices=["mini", "normal", "pro"], default="normal")
+    parser.add_argument("--size", choices=["mini", "normal", "pro", "max"], default="normal")
     parser.add_argument("--version", type=int, default=None, help="Versionsnummer fuer Naming-Schema (Pflicht im --no-ui Modus).")
     return parser.parse_args()
 
@@ -148,7 +149,7 @@ def save_model_json(metadata: dict[str, object], output_path: Path) -> None:
 
 def train_model(size: str, version: int, callback: ProgressCallback | None = None) -> dict[str, object]:
     if size not in MODEL_PROFILES:
-        raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro.")
+        raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro, max.")
     if version < 1:
         raise ValueError("Version muss >= 1 sein.")
 
@@ -322,7 +323,7 @@ class TrainingUI:
         frame.pack(fill="both", expand=True)
 
         ttk.Label(frame, text="Modellgroesse:").grid(row=0, column=0, sticky="w")
-        self.size_combo = ttk.Combobox(frame, textvariable=self.size_var, state="readonly", values=["mini", "normal", "pro"], width=12)
+        self.size_combo = ttk.Combobox(frame, textvariable=self.size_var, state="readonly", values=["mini", "normal", "pro", "max"], width=12)
         self.size_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
         self.size_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_profile_label())
 

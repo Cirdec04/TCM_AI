@@ -14,15 +14,17 @@
       - kein Tag = `normal`
       - `-mini` = kleines/schnelles Modell
       - `-pro` = gräesseres/langsames Modell
+      - `-max` = sehr grosses/sehr langsames Modell
     - Beispiele:
       - `TCM-o1` (normal)
       - `TCM-o2-mini`
       - `TCM-o3-pro`
+      - `TCM-o4-max`
 - `train.py`
   - Laedt/liest die Trainingsdaten aus `data/`.
   - Trainiert das neuronale Netz.
   - Speichert das trainierte Modell nach `models/`.
-  - Konfigurierbar (Iterationen, Modellgröessen wie mini/normal/pro, etc.).
+  - Konfigurierbar (Iterationen, Modellgroessen wie mini/normal/pro/max, etc.).
 - `nn.py`
   - Enthält den gemeinsamen NN-Code (Netzwerk, Vorhersage, Laden/Speichern).
 - `app.py`
