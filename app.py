@@ -46,6 +46,7 @@ class DigitApp:
         ttk.Label(top_frame, text="Modell:").pack(side="left")
         self.model_combo = ttk.Combobox(top_frame, textvariable=self.model_var, state="readonly", width=30)
         self.model_combo.pack(side="left", padx=8)
+        self.model_combo.bind("<<ComboboxSelected>>", self.on_model_changed)
 
         ttk.Button(top_frame, text="Modelle neu laden", command=self.refresh_model_list).pack(side="left")
 
@@ -57,16 +58,17 @@ class DigitApp:
         self._init_pixel_canvas()
         self.canvas.bind("<B1-Motion>", self.on_draw)
         self.canvas.bind("<Button-1>", self.on_draw)
+        self.canvas.bind("<B3-Motion>", self.on_erase)
+        self.canvas.bind("<Button-3>", self.on_erase)
         ttk.Label(
             canvas_frame,
-            text=f"Zoom x{self.display_scale} (echtes 28x28 Raster)",
+            text=f"Zoom x{self.display_scale} (28x28 Raster) | Links: zeichnen | Rechts: radieren",
         ).pack(pady=(6, 0))
 
         buttons = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         buttons.pack(fill="x")
 
-        ttk.Button(buttons, text="Vorhersage", command=self.predict).pack(side="left")
-        ttk.Button(buttons, text="Loeschen", command=self.clear_canvas).pack(side="left", padx=8)
+        ttk.Button(buttons, text="Alles loeschen", command=self.clear_canvas).pack(side="left")
 
         result_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         result_frame.pack(fill="x")
@@ -111,6 +113,10 @@ class DigitApp:
 
         self.load_selected_model()
 
+    def on_model_changed(self, _event: tk.Event) -> None:
+        self.load_selected_model()
+        self.update_prediction(silent=True)
+
     def load_selected_model(self) -> None:
         selected = self.model_var.get().strip()
         if not selected:
@@ -136,9 +142,14 @@ class DigitApp:
     def on_draw(self, event: tk.Event) -> None:
         x = int(event.x)
         y = int(event.y)
-        self._paint_grid(x, y)
+        self._paint_grid(x, y, value=1.0, color="white")
 
-    def _paint_grid(self, x: int, y: int) -> None:
+    def on_erase(self, event: tk.Event) -> None:
+        x = int(event.x)
+        y = int(event.y)
+        self._paint_grid(x, y, value=0.0, color="black")
+
+    def _paint_grid(self, x: int, y: int, value: float, color: str) -> None:
         gx = x // self.display_scale
         gy = y // self.display_scale
         for dy in range(-self.brush_radius, self.brush_radius + 1):
@@ -148,31 +159,32 @@ class DigitApp:
                 nx = gx + dx
                 ny = gy + dy
                 if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
-                    self.grid[ny, nx] = 1.0
-                    self.canvas.itemconfig(self.pixel_ids[ny][nx], fill="white")
+                    self.grid[ny, nx] = value
+                    self.canvas.itemconfig(self.pixel_ids[ny][nx], fill=color)
+        self.update_prediction(silent=True)
 
     def clear_canvas(self) -> None:
         self.grid.fill(0.0)
         self.canvas.itemconfig("pixel", fill="black")
-        self.result_var.set("Zeichnung geloescht.")
+        self.result_var.set("Zeichnung geloescht. Zeichne eine Ziffer.")
 
-    def predict(self) -> None:
+    def update_prediction(self, silent: bool = True) -> None:
         if self.model is None or self.model_name != self.model_var.get().strip():
             self.load_selected_model()
         if self.model is None:
-            messagebox.showwarning("Hinweis", "Bitte zuerst ein Modell laden.")
+            if not silent:
+                messagebox.showwarning("Hinweis", "Bitte zuerst ein Modell laden.")
             return
         if float(np.sum(self.grid)) == 0.0:
-            messagebox.showinfo("Hinweis", "Bitte zuerst eine Ziffer zeichnen.")
+            self.result_var.set("Zeichnung leer. Zeichne eine Ziffer.")
             return
 
         x_input = self.grid.reshape(1, -1).astype(np.float32)
         probs = self.model.predict_proba(x_input)[0]
         pred = int(np.argmax(probs))
 
-        top3 = np.argsort(probs)[-3:][::-1]
-        lines = [f"Vorhersage: {pred}", "Top 3 Wahrscheinlichkeiten:"]
-        for idx in top3:
+        lines = [f"Vorhersage: {pred}", "Wahrscheinlichkeiten pro Zahl (0-9):"]
+        for idx in range(10):
             lines.append(f"  {idx}: {probs[idx] * 100:.2f}%")
         self.result_var.set("\n".join(lines))
 
