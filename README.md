@@ -49,3 +49,4 @@
 ## Datenquelle
 
 - Reduced MNIST: `https://www.kaggle.com/datasets/mohamedgamal07/reduced-mnist` / gespeichert unter `data/training` und `data/testing`
+##Wir nutzen neu https://www.kaggle.com/datasets/alexanderyyy/mnist-png weil das 60'000 training und 10'000 testing daten hat und ich versuchen will so gut wie möglich zu trainieren
