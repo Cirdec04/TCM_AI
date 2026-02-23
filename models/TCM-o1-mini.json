@@ -1,0 +1,28 @@
+{
+  "model_name": "TCM-o1-mini",
+  "created_at": "2026-02-23T17:16:27",
+  "data_dir": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\data",
+  "size": "mini",
+  "hidden_size": 128,
+  "epochs": 128,
+  "batch_size": 256,
+  "learning_rate": 0.008,
+  "test_ratio": 0.2,
+  "seed": 1556286313,
+  "samples": {
+    "total": 10000,
+    "train": 8000,
+    "test": 2000
+  },
+  "final_metrics": {
+    "train_loss": 0.22997630992904305,
+    "train_acc": 0.9388427734375,
+    "test_loss": 0.2832595109939575,
+    "test_acc": 0.9185
+  },
+  "artifacts": {
+    "model_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o1-mini.npz",
+    "plot_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o1-mini_training.png",
+    "metadata_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o1-mini.json"
+  }
+}

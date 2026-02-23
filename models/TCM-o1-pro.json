@@ -1,0 +1,28 @@
+{
+  "model_name": "TCM-o1-pro",
+  "created_at": "2026-02-23T17:19:23",
+  "data_dir": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\data",
+  "size": "pro",
+  "hidden_size": 2048,
+  "epochs": 512,
+  "batch_size": 512,
+  "learning_rate": 0.003,
+  "test_ratio": 0.2,
+  "seed": 44899450,
+  "samples": {
+    "total": 10000,
+    "train": 8000,
+    "test": 2000
+  },
+  "final_metrics": {
+    "train_loss": 0.20681204460561275,
+    "train_acc": 0.947119140625,
+    "test_loss": 0.26350435614585876,
+    "test_acc": 0.9145
+  },
+  "artifacts": {
+    "model_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o1-pro.npz",
+    "plot_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o1-pro_training.png",
+    "metadata_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o1-pro.json"
+  }
+}
