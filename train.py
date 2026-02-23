@@ -75,9 +75,6 @@ def _load_image_as_vector(path: Path) -> np.ndarray:
             image = image.resize((28, 28))
         pixels = np.asarray(image, dtype=np.float32)
 
-    if float(pixels.mean()) > 127.0:
-        pixels = 255.0 - pixels
-
     pixels = pixels / 255.0
     return pixels.reshape(-1)
 

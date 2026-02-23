@@ -26,7 +26,8 @@ class DigitApp:
         self.grid_size = 28
         self.display_scale = 12
         self.canvas_size = self.grid_size * self.display_scale
-        self.brush_radius = 1
+        self.brush_radius = 2
+        self.brush_strength = 0.35
 
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
         self.pixel_ids: list[list[int]] = []
@@ -62,7 +63,7 @@ class DigitApp:
         self.canvas.bind("<Button-3>", self.on_erase)
         ttk.Label(
             canvas_frame,
-            text=f"Zoom x{self.display_scale} (28x28 Raster) | Linksklick: zeichnen | Rechtsklick: radieren",
+            text=f"Zoom x{self.display_scale} (28x28 Raster) | Linksklick: weicher Brush | Rechtsklick: radieren",
         ).pack(pady=(6, 0))
 
         buttons = ttk.Frame(self.root, padding=(10, 0, 10, 10))
@@ -142,24 +143,32 @@ class DigitApp:
     def on_draw(self, event: tk.Event) -> None:
         x = int(event.x)
         y = int(event.y)
-        self._paint_grid(x, y, value=1.0, color="white")
+        self._paint_grid(x, y, direction=1.0)
 
     def on_erase(self, event: tk.Event) -> None:
         x = int(event.x)
         y = int(event.y)
-        self._paint_grid(x, y, value=0.0, color="black")
+        self._paint_grid(x, y, direction=-1.0)
 
-    def _paint_grid(self, x: int, y: int, value: float, color: str) -> None:
+    def _paint_grid(self, x: int, y: int, direction: float) -> None:
         gx = x // self.display_scale
         gy = y // self.display_scale
+        radius = self.brush_radius
+        radius_sq = max(1, radius * radius)
         for dy in range(-self.brush_radius, self.brush_radius + 1):
             for dx in range(-self.brush_radius, self.brush_radius + 1):
-                if dx * dx + dy * dy > self.brush_radius * self.brush_radius:
+                dist_sq = dx * dx + dy * dy
+                if dist_sq > radius_sq:
                     continue
                 nx = gx + dx
                 ny = gy + dy
                 if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
-                    self.grid[ny, nx] = value
+                    falloff = 1.0 - (dist_sq / radius_sq)
+                    delta = direction * self.brush_strength * max(0.2, falloff)
+                    new_value = float(np.clip(self.grid[ny, nx] + delta, 0.0, 1.0))
+                    self.grid[ny, nx] = new_value
+                    gray = int(round(new_value * 255.0))
+                    color = f"#{gray:02x}{gray:02x}{gray:02x}"
                     self.canvas.itemconfig(self.pixel_ids[ny][nx], fill=color)
         self.update_prediction(silent=True)
 
