@@ -23,12 +23,13 @@ class DigitApp:
         self.root.resizable(False, False)
 
         self.models_dir = models_dir
-        self.canvas_size = 280
         self.grid_size = 28
-        self.scale = self.canvas_size // self.grid_size
-        self.brush_radius = 2
+        self.display_scale = 12
+        self.canvas_size = self.grid_size * self.display_scale
+        self.brush_radius = 1
 
         self.grid = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+        self.pixel_ids: list[list[int]] = []
         self.model: SimpleMLP | None = None
         self.model_name: str | None = None
 
@@ -53,8 +54,13 @@ class DigitApp:
 
         self.canvas = tk.Canvas(canvas_frame, width=self.canvas_size, height=self.canvas_size, bg="black", highlightthickness=1)
         self.canvas.pack()
+        self._init_pixel_canvas()
         self.canvas.bind("<B1-Motion>", self.on_draw)
         self.canvas.bind("<Button-1>", self.on_draw)
+        ttk.Label(
+            canvas_frame,
+            text=f"Zoom x{self.display_scale} (echtes 28x28 Raster)",
+        ).pack(pady=(6, 0))
 
         buttons = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         buttons.pack(fill="x")
@@ -65,6 +71,28 @@ class DigitApp:
         result_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         result_frame.pack(fill="x")
         ttk.Label(result_frame, textvariable=self.result_var, justify="left").pack(anchor="w")
+
+    def _init_pixel_canvas(self) -> None:
+        self.pixel_ids = []
+        for y in range(self.grid_size):
+            row_ids: list[int] = []
+            for x in range(self.grid_size):
+                x1 = x * self.display_scale
+                y1 = y * self.display_scale
+                x2 = x1 + self.display_scale
+                y2 = y1 + self.display_scale
+                pixel_id = self.canvas.create_rectangle(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    fill="black",
+                    outline="#1a1a1a",
+                    width=1,
+                    tags=("pixel",),
+                )
+                row_ids.append(pixel_id)
+            self.pixel_ids.append(row_ids)
 
     def refresh_model_list(self) -> None:
         self.models_dir.mkdir(parents=True, exist_ok=True)
@@ -108,13 +136,11 @@ class DigitApp:
     def on_draw(self, event: tk.Event) -> None:
         x = int(event.x)
         y = int(event.y)
-        r = 8
-        self.canvas.create_oval(x - r, y - r, x + r, y + r, fill="white", outline="white")
         self._paint_grid(x, y)
 
     def _paint_grid(self, x: int, y: int) -> None:
-        gx = int(x / self.scale)
-        gy = int(y / self.scale)
+        gx = x // self.display_scale
+        gy = y // self.display_scale
         for dy in range(-self.brush_radius, self.brush_radius + 1):
             for dx in range(-self.brush_radius, self.brush_radius + 1):
                 if dx * dx + dy * dy > self.brush_radius * self.brush_radius:
@@ -123,11 +149,11 @@ class DigitApp:
                 ny = gy + dy
                 if 0 <= nx < self.grid_size and 0 <= ny < self.grid_size:
                     self.grid[ny, nx] = 1.0
+                    self.canvas.itemconfig(self.pixel_ids[ny][nx], fill="white")
 
     def clear_canvas(self) -> None:
-        self.canvas.delete("all")
-        self.canvas.configure(bg="black")
         self.grid.fill(0.0)
+        self.canvas.itemconfig("pixel", fill="black")
         self.result_var.set("Zeichnung geloescht.")
 
     def predict(self) -> None:

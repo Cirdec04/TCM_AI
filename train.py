@@ -29,9 +29,9 @@ DATA_DIR = BASE_DIR / "data"
 MODELS_DIR = BASE_DIR / "models"
 
 MODEL_PROFILES: dict[str, dict[str, float | int]] = {
-    "mini": {"hidden_size": 128, "epochs": 24, "batch_size": 128, "learning_rate": 0.02},
-    "normal": {"hidden_size": 256, "epochs": 40, "batch_size": 128, "learning_rate": 0.016},
-    "pro": {"hidden_size": 512, "epochs": 70, "batch_size": 256, "learning_rate": 0.012},
+    "mini": {"hidden_size": 256, "epochs": 100, "batch_size": 256, "learning_rate": 0.008},
+    "normal": {"hidden_size": 512, "epochs": 100, "batch_size": 256, "learning_rate": 0.005},
+    "pro": {"hidden_size": 2048, "epochs": 256, "batch_size": 512, "learning_rate": 0.003},
 }
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
