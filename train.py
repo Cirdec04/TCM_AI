@@ -285,6 +285,13 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
             "test_loss": float(history["test_loss"][-1]),
             "test_acc": float(history["test_acc"][-1]),
         },
+        "training_history": {
+            "epochs": [int(i) for i in range(1, epochs + 1)],
+            "train_loss": [float(v) for v in history["train_loss"]],
+            "test_loss": [float(v) for v in history["test_loss"]],
+            "train_acc": [float(v) for v in history["train_acc"]],
+            "test_acc": [float(v) for v in history["test_acc"]],
+        },
         "artifacts": {
             "model_file": str(model_path),
             "plot_file": str(plot_path),
