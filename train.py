@@ -92,7 +92,7 @@ def build_model_name(version: int, size: str) -> str:
     return f"TCM-o{version}{suffix}"
 
 
-def generate_random_seed() -> int:
+def get_fixed_seed() -> int:
     return 42
 
 
@@ -149,7 +149,7 @@ def train_model(size: str, version: int, callback: ProgressCallback | None = Non
     epochs = int(profile["epochs"])
     batch_size = int(profile["batch_size"])
     learning_rate = float(profile["learning_rate"])
-    seed = generate_random_seed()
+    seed = get_fixed_seed()
 
     model_name = build_model_name(version=version, size=size)
     model_path = models_dir / f"{model_name}.npz"
