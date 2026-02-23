@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import secrets
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -116,7 +115,7 @@ def build_model_name(version: int, size: str) -> str:
 
 
 def generate_random_seed() -> int:
-    return secrets.randbelow(2_147_483_647) + 1
+    return 42
 
 
 def save_training_plot(history: dict[str, list[float]], output_path: Path) -> None:
