@@ -134,6 +134,9 @@ def get_fixed_seed() -> int:
 
 def save_training_plot(history: dict[str, list[float]], output_path: Path) -> None:
     epochs = np.arange(1, len(history["train_loss"]) + 1)
+    epoch_count = len(epochs)
+    x_ticks = np.linspace(1, max(1, epoch_count), num=6, dtype=int)
+    x_ticks = np.unique(x_ticks)
 
     plt.figure(figsize=(10, 4))
 
@@ -143,6 +146,9 @@ def save_training_plot(history: dict[str, list[float]], output_path: Path) -> No
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("Loss Verlauf")
+    plt.xlim(1, max(1, epoch_count))
+    plt.xticks(x_ticks)
+    plt.ylim(0.0, 2.5)
     plt.legend()
 
     plt.subplot(1, 2, 2)
@@ -151,6 +157,9 @@ def save_training_plot(history: dict[str, list[float]], output_path: Path) -> No
     plt.xlabel("Epoch")
     plt.ylabel("Accuracy")
     plt.title("Accuracy Verlauf")
+    plt.xlim(1, max(1, epoch_count))
+    plt.xticks(x_ticks)
+    plt.ylim(0.0, 1.0)
     plt.legend()
 
     plt.tight_layout()
