@@ -3,8 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import secrets
+import threading
+import tkinter as tk
 from datetime import datetime
 from pathlib import Path
+from queue import Empty, Queue
+from tkinter import messagebox, ttk
+from typing import Any, Callable
 
 from deps import ensure_requirements_installed
 
@@ -21,58 +26,25 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp"}
 TEST_RATIO = 0.2
 
 MODEL_PROFILES: dict[str, dict[str, float | int]] = {
-    "mini": {
-        "hidden_size": 64,
-        "epochs": 12,
-        "batch_size": 64,
-        "learning_rate": 0.01,
-    },
-    "normal": {
-        "hidden_size": 128,
-        "epochs": 20,
-        "batch_size": 64,
-        "learning_rate": 0.008,
-    },
-    "pro": {
-        "hidden_size": 256,
-        "epochs": 35,
-        "batch_size": 128,
-        "learning_rate": 0.006,
-    },
+    "mini": {"hidden_size": 64, "epochs": 12, "batch_size": 64, "learning_rate": 0.01},
+    "normal": {"hidden_size": 128, "epochs": 20, "batch_size": 64, "learning_rate": 0.008},
+    "pro": {"hidden_size": 256, "epochs": 35, "batch_size": 128, "learning_rate": 0.006},
 }
+
+ProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Trainiere ein einfaches MLP fuer Ziffernerkennung.")
+    parser.add_argument("--no-ui", action="store_true", help="Kein GUI-Fenster, direkt im Terminal trainieren.")
     parser.add_argument("--size", choices=["mini", "normal", "pro"], default="normal")
-    parser.add_argument("--version", type=int, default=None, help="Versionsnummer fuer Naming-Schema (Pflicht ohne Prompt).")
-    parser.add_argument("--no-prompt", action="store_true", help="Kein Fragen-Modus, nur CLI-Parameter.")
+    parser.add_argument("--version", type=int, default=None, help="Versionsnummer fuer Naming-Schema (Pflicht im --no-ui Modus).")
     return parser.parse_args()
 
 
-def _prompt_str(question: str, default: str | None = None) -> str:
-    suffix = f" [{default}]" if default is not None else ""
-    while True:
-        value = input(f"{question}{suffix}: ").strip()
-        if value:
-            return value
-        if default is not None:
-            return default
-        print("Bitte einen Wert eingeben.")
-
-
-def _prompt_int(question: str, default: int | None = None, min_value: int | None = None) -> int:
-    while True:
-        text = _prompt_str(question, None if default is None else str(default))
-        try:
-            value = int(text)
-        except ValueError:
-            print("Bitte eine ganze Zahl eingeben.")
-            continue
-        if min_value is not None and value < min_value:
-            print(f"Bitte eine Zahl >= {min_value} eingeben.")
-            continue
-        return value
+def _emit(callback: ProgressCallback | None, event: str, **data: Any) -> None:
+    if callback is not None:
+        callback(event, data)
 
 
 def _load_image_as_vector(path: Path) -> np.ndarray:
@@ -141,41 +113,7 @@ def build_model_name(version: int, size: str) -> str:
 
 
 def generate_random_seed() -> int:
-    # 32-bit positiver Bereich fuer reproduzierbare NumPy-Nutzung.
     return secrets.randbelow(2_147_483_647) + 1
-
-
-def prompt_for_training_settings(args: argparse.Namespace, models_dir: Path) -> argparse.Namespace:
-    print("\n=== Training Konfiguration ===")
-    print("Einfach Enter druecken, um den Standardwert zu behalten.\n")
-
-    while True:
-        size = _prompt_str("Modellgroesse (mini/normal/pro)", args.size).lower()
-        if size in MODEL_PROFILES:
-            args.size = size
-            break
-        print("Ungueltig. Erlaubt: mini, normal, pro.")
-
-    profile = MODEL_PROFILES[args.size]
-    print(
-        "Aktive Standards: "
-        f"hidden_size={int(profile['hidden_size'])}, "
-        f"epochs={int(profile['epochs'])}, "
-        f"batch_size={int(profile['batch_size'])}, "
-        f"learning_rate={float(profile['learning_rate'])}"
-    )
-
-    while True:
-        version = _prompt_int("Version (Pflicht, z. B. 1, 2, 3)", args.version, min_value=1)
-        candidate_name = build_model_name(version, args.size)
-        if (models_dir / f"{candidate_name}.npz").exists() or (models_dir / f"{candidate_name}.json").exists():
-            print(f"Modell '{candidate_name}' existiert bereits. Bitte andere Version waehlen.")
-            args.version = None
-            continue
-        args.version = version
-        break
-
-    return args
 
 
 def save_training_plot(history: dict[str, list[float]], output_path: Path) -> None:
@@ -210,57 +148,52 @@ def save_model_json(metadata: dict[str, object], output_path: Path) -> None:
     output_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
-def main() -> None:
-    args = parse_args()
+def train_model(size: str, version: int, callback: ProgressCallback | None = None) -> dict[str, object]:
+    if size not in MODEL_PROFILES:
+        raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro.")
+    if version < 1:
+        raise ValueError("Version muss >= 1 sein.")
+
     data_dir = Path("data")
     models_dir = Path("models")
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.no_prompt:
-        if args.version is None:
-            raise SystemExit("Ohne Prompt ist --version Pflicht. Oder starte ohne --no-prompt.")
-        if args.size not in MODEL_PROFILES:
-            raise SystemExit("Ungueltige Groesse. Erlaubt: mini, normal, pro.")
-    else:
-        args = prompt_for_training_settings(args, models_dir)
-
-    if args.version is None:
-        raise SystemExit("Version fehlt. Bitte Version eingeben.")
-
-    profile = MODEL_PROFILES[args.size]
+    profile = MODEL_PROFILES[size]
     hidden_size = int(profile["hidden_size"])
     epochs = int(profile["epochs"])
     batch_size = int(profile["batch_size"])
     learning_rate = float(profile["learning_rate"])
-
     seed = generate_random_seed()
 
-    model_name = build_model_name(version=args.version, size=args.size)
+    model_name = build_model_name(version=version, size=size)
     model_path = models_dir / f"{model_name}.npz"
     plot_path = models_dir / f"{model_name}_training.png"
     metadata_path = models_dir / f"{model_name}.json"
 
     if model_path.exists() or metadata_path.exists():
-        raise FileExistsError(
-            f"Modell existiert bereits: {model_name}. "
-            "Bitte Version erhoehen oder Datei umbenennen/loeschen."
-        )
+        raise FileExistsError(f"Modell '{model_name}' existiert bereits. Bitte andere Version waehlen.")
 
-    print(f"\nLade Daten aus: {data_dir}")
+    _emit(callback, "info", message=f"Lade Daten aus: {data_dir}")
     x, y = load_dataset_from_folders(data_dir)
-    print(f"Geladene Samples: {len(y)}")
+    _emit(callback, "info", message=f"Geladene Samples: {len(y)}")
 
     x_train, y_train, x_test, y_test = split_train_test(x, y, TEST_RATIO, seed)
-    print(f"Train: {len(y_train)} | Test: {len(y_test)}")
-    print(
-        "Training startet mit: "
-        f"size={args.size}, hidden_size={hidden_size}, epochs={epochs}, "
-        f"batch_size={batch_size}, learning_rate={learning_rate}, seed={seed}"
+    _emit(callback, "info", message=f"Train: {len(y_train)} | Test: {len(y_test)}")
+    _emit(
+        callback,
+        "info",
+        message=(
+            "Training startet mit: "
+            f"size={size}, hidden_size={hidden_size}, epochs={epochs}, "
+            f"batch_size={batch_size}, learning_rate={learning_rate}, seed={seed}"
+        ),
     )
 
     model = SimpleMLP(input_size=28 * 28, hidden_size=hidden_size, output_size=10, seed=seed)
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
     rng = np.random.default_rng(seed)
+
+    _emit(callback, "start", epochs=epochs)
 
     for epoch in range(1, epochs + 1):
         indices = np.arange(x_train.shape[0])
@@ -289,28 +222,29 @@ def main() -> None:
         history["test_loss"].append(test_loss)
         history["test_acc"].append(test_acc)
 
-        print(
-            f"Epoch {epoch:02d}/{epochs} | "
-            f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
-            f"Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f}"
+        _emit(
+            callback,
+            "progress",
+            epoch=epoch,
+            epochs=epochs,
+            train_loss=train_loss,
+            train_acc=train_acc,
+            test_loss=test_loss,
+            test_acc=test_acc,
         )
 
-    metadata = {
+    metadata: dict[str, object] = {
         "model_name": model_name,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "data_dir": str(data_dir),
-        "size": args.size,
+        "size": size,
         "hidden_size": hidden_size,
         "epochs": epochs,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
         "test_ratio": TEST_RATIO,
         "seed": seed,
-        "samples": {
-            "total": int(len(y)),
-            "train": int(len(y_train)),
-            "test": int(len(y_test)),
-        },
+        "samples": {"total": int(len(y)), "train": int(len(y_train)), "test": int(len(y_test))},
         "final_metrics": {
             "train_loss": float(history["train_loss"][-1]),
             "train_acc": float(history["train_acc"][-1]),
@@ -328,11 +262,202 @@ def main() -> None:
     save_training_plot(history, plot_path)
     save_model_json(metadata, metadata_path)
 
-    print("\nTraining fertig.")
-    print(f"Modell gespeichert: {model_path}")
-    print(f"Plot gespeichert:   {plot_path}")
-    print(f"JSON gespeichert:   {metadata_path}")
-    print(f"Finale Test-Accuracy: {history['test_acc'][-1]:.4f}")
+    _emit(callback, "info", message="Training fertig.")
+    _emit(callback, "info", message=f"Modell gespeichert: {model_path}")
+    _emit(callback, "info", message=f"Plot gespeichert:   {plot_path}")
+    _emit(callback, "info", message=f"JSON gespeichert:   {metadata_path}")
+
+    return metadata
+
+
+def run_cli(size: str, version: int) -> None:
+    def callback(event: str, data: dict[str, Any]) -> None:
+        if event == "progress":
+            print(
+                f"Epoch {data['epoch']:02d}/{data['epochs']} | "
+                f"Train Loss: {data['train_loss']:.4f} | Train Acc: {data['train_acc']:.4f} | "
+                f"Test Loss: {data['test_loss']:.4f} | Test Acc: {data['test_acc']:.4f}"
+            )
+        elif event == "info":
+            print(data["message"])
+
+    metadata = train_model(size=size, version=version, callback=callback)
+    final_acc = float((metadata.get("final_metrics", {}) or {}).get("test_acc", 0.0))
+    print(f"Finale Test-Accuracy: {final_acc:.4f}")
+
+
+class TrainingUI:
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.root.title("Training Konfiguration")
+        self.root.resizable(False, False)
+
+        self.event_queue: Queue[tuple[str, dict[str, Any]]] = Queue()
+        self.training_running = False
+
+        self.size_var = tk.StringVar(value="normal")
+        self.version_var = tk.StringVar(value="1")
+        self.status_var = tk.StringVar(value="Bereit")
+
+        self._build_ui()
+        self._refresh_profile_label()
+
+    def _build_ui(self) -> None:
+        frame = ttk.Frame(self.root, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Modellgroesse:").grid(row=0, column=0, sticky="w")
+        self.size_combo = ttk.Combobox(frame, textvariable=self.size_var, state="readonly", values=["mini", "normal", "pro"], width=12)
+        self.size_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.size_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_profile_label())
+
+        ttk.Label(frame, text="Version:").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.version_entry = ttk.Entry(frame, textvariable=self.version_var, width=14)
+        self.version_entry.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
+
+        self.profile_label = ttk.Label(frame, text="", justify="left")
+        self.profile_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+        self.start_btn = ttk.Button(frame, text="Training starten", command=self.start_training)
+        self.start_btn.grid(row=3, column=0, columnspan=2, sticky="we", pady=(10, 0))
+
+        self.progress = ttk.Progressbar(frame, mode="determinate", length=360)
+        self.progress.grid(row=4, column=0, columnspan=2, sticky="we", pady=(10, 0))
+
+        ttk.Label(frame, textvariable=self.status_var).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        self.log_text = tk.Text(frame, width=70, height=12, state="disabled")
+        self.log_text.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
+
+    def _refresh_profile_label(self) -> None:
+        profile = MODEL_PROFILES[self.size_var.get()]
+        self.profile_label.config(
+            text=(
+                f"Profile: hidden={int(profile['hidden_size'])}, "
+                f"epochs={int(profile['epochs'])}, "
+                f"batch={int(profile['batch_size'])}, "
+                f"lr={float(profile['learning_rate'])}"
+            )
+        )
+
+    def _append_log(self, message: str) -> None:
+        self.log_text.config(state="normal")
+        self.log_text.insert("end", message + "\n")
+        self.log_text.see("end")
+        self.log_text.config(state="disabled")
+
+    def start_training(self) -> None:
+        if self.training_running:
+            return
+
+        try:
+            version = int(self.version_var.get().strip())
+            if version < 1:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Fehler", "Version muss eine ganze Zahl >= 1 sein.")
+            return
+
+        size = self.size_var.get().strip().lower()
+        if size not in MODEL_PROFILES:
+            messagebox.showerror("Fehler", "Ungueltige Modellgroesse.")
+            return
+
+        self.training_running = True
+        self.start_btn.config(state="disabled")
+        self.size_combo.config(state="disabled")
+        self.version_entry.config(state="disabled")
+
+        epochs = int(MODEL_PROFILES[size]["epochs"])
+        self.progress["maximum"] = epochs
+        self.progress["value"] = 0
+        self.status_var.set("Training laeuft...")
+        self._append_log(f"Starte Training: size={size}, version={version}")
+
+        thread = threading.Thread(target=self._worker, args=(size, version), daemon=True)
+        thread.start()
+        self.root.after(150, self._poll_events)
+
+    def _worker(self, size: str, version: int) -> None:
+        def callback(event: str, data: dict[str, Any]) -> None:
+            self.event_queue.put((event, data))
+
+        try:
+            metadata = train_model(size=size, version=version, callback=callback)
+            self.event_queue.put(("success", {"metadata": metadata}))
+        except Exception as exc:  # noqa: BLE001
+            self.event_queue.put(("error", {"message": str(exc)}))
+
+    def _poll_events(self) -> None:
+        keep_polling = self.training_running
+
+        while True:
+            try:
+                event, data = self.event_queue.get_nowait()
+            except Empty:
+                break
+
+            if event == "info":
+                message = str(data.get("message", ""))
+                self._append_log(message)
+                self.status_var.set(message)
+            elif event == "start":
+                self.progress["maximum"] = int(data.get("epochs", 1))
+                self.progress["value"] = 0
+            elif event == "progress":
+                epoch = int(data.get("epoch", 0))
+                epochs = int(data.get("epochs", 1))
+                self.progress["value"] = epoch
+                msg = (
+                    f"Epoch {epoch:02d}/{epochs} | "
+                    f"Train Loss: {float(data['train_loss']):.4f} | Train Acc: {float(data['train_acc']):.4f} | "
+                    f"Test Loss: {float(data['test_loss']):.4f} | Test Acc: {float(data['test_acc']):.4f}"
+                )
+                self._append_log(msg)
+                self.status_var.set(f"Epoch {epoch}/{epochs}")
+            elif event == "success":
+                metadata = data.get("metadata", {})
+                final_metrics = metadata.get("final_metrics", {}) if isinstance(metadata, dict) else {}
+                final_acc = float(final_metrics.get("test_acc", 0.0))
+                self._append_log(f"Finale Test-Accuracy: {final_acc:.4f}")
+                self.status_var.set("Training abgeschlossen")
+                self._finish_training()
+                messagebox.showinfo("Fertig", f"Training abgeschlossen.\nFinale Test-Accuracy: {final_acc:.4f}")
+                keep_polling = False
+            elif event == "error":
+                message = str(data.get("message", "Unbekannter Fehler"))
+                self._append_log("Fehler: " + message)
+                self.status_var.set("Fehler")
+                self._finish_training()
+                messagebox.showerror("Training fehlgeschlagen", message)
+                keep_polling = False
+
+        if keep_polling:
+            self.root.after(150, self._poll_events)
+
+    def _finish_training(self) -> None:
+        self.training_running = False
+        self.start_btn.config(state="normal")
+        self.size_combo.config(state="readonly")
+        self.version_entry.config(state="normal")
+
+
+def run_ui() -> None:
+    root = tk.Tk()
+    TrainingUI(root)
+    root.mainloop()
+
+
+def main() -> None:
+    args = parse_args()
+
+    if args.no_ui:
+        if args.version is None:
+            raise SystemExit("Im --no-ui Modus ist --version Pflicht.")
+        run_cli(size=args.size, version=args.version)
+        return
+
+    run_ui()
 
 
 if __name__ == "__main__":
