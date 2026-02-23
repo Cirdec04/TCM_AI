@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -29,20 +30,19 @@ TEST_DATA_DIR = DATA_DIR / "testing"
 MODELS_DIR = BASE_DIR / "models"
 
 MODEL_PROFILES: dict[str, dict[str, float | int]] = {
-    "mini": {"hidden_size": 128, "epochs": 128, "batch_size": 256, "learning_rate": 0.008},
-    "normal": {"hidden_size": 512, "epochs": 256, "batch_size": 256, "learning_rate": 0.005},
+    "mini": {"hidden_size": 128, "epochs": 64, "batch_size": 256, "learning_rate": 0.008},
+    "normal": {"hidden_size": 512, "epochs": 128, "batch_size": 256, "learning_rate": 0.005},
     "pro": {"hidden_size": 2048, "epochs": 512, "batch_size": 512, "learning_rate": 0.003},
-    "max": {"hidden_size": 4096, "epochs": 1024, "batch_size": 512, "learning_rate": 0.002},
 }
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Trainiere ein einfaches MLP fuer Ziffernerkennung.")
-    parser.add_argument("--no-ui", action="store_true", help="Kein GUI-Fenster, direkt im Terminal trainieren.")
-    parser.add_argument("--size", choices=["mini", "normal", "pro", "max"], default="normal")
-    parser.add_argument("--version", type=int, default=None, help="Versionsnummer fuer Naming-Schema (Pflicht im --no-ui Modus).")
+    parser = argparse.ArgumentParser(description="Trainiere ein einfaches MLP für Ziffernerkennung.")
+    parser.add_argument("--no-ui", action="store_true", help="Kein GUI, direkt im Terminal trainieren.")
+    parser.add_argument("--size", choices=["mini", "normal", "pro"], default="normal")
+    parser.add_argument("--version", type=str, default=None, help="Versionsnummer des Modells (z. B. 2 oder 2.1).")
     return parser.parse_args()
 
 
@@ -106,7 +106,14 @@ def load_dataset_from_folders(
     return x, y
 
 
-def build_model_name(version: int, size: str) -> str:
+def validate_version(version: str) -> str:
+    value = version.strip()
+    if not re.fullmatch(r"\d+(?:\.\d+)*", value):
+        raise ValueError("Version muss wie 1, 2.1 oder 2.1.3 aussehen.")
+    return value
+
+
+def build_model_name(version: str, size: str) -> str:
     suffix = "" if size == "normal" else f"-{size}"
     return f"TCM-o{version}{suffix}"
 
@@ -147,11 +154,10 @@ def save_model_json(metadata: dict[str, object], output_path: Path) -> None:
     output_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
-def train_model(size: str, version: int, callback: ProgressCallback | None = None) -> dict[str, object]:
+def train_model(size: str, version: str, callback: ProgressCallback | None = None) -> dict[str, object]:
     if size not in MODEL_PROFILES:
-        raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro, max.")
-    if version < 1:
-        raise ValueError("Version muss >= 1 sein.")
+        raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro.")
+    version = validate_version(version)
 
     train_data_dir = TRAIN_DATA_DIR
     test_data_dir = TEST_DATA_DIR
@@ -286,7 +292,7 @@ def train_model(size: str, version: int, callback: ProgressCallback | None = Non
     return metadata
 
 
-def run_cli(size: str, version: int) -> None:
+def run_cli(size: str, version: str) -> None:
     def callback(event: str, data: dict[str, Any]) -> None:
         if event == "progress":
             print(
@@ -323,7 +329,7 @@ class TrainingUI:
         frame.pack(fill="both", expand=True)
 
         ttk.Label(frame, text="Modellgroesse:").grid(row=0, column=0, sticky="w")
-        self.size_combo = ttk.Combobox(frame, textvariable=self.size_var, state="readonly", values=["mini", "normal", "pro", "max"], width=12)
+        self.size_combo = ttk.Combobox(frame, textvariable=self.size_var, state="readonly", values=["mini", "normal", "pro"], width=12)
         self.size_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
         self.size_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_profile_label())
 
@@ -366,12 +372,11 @@ class TrainingUI:
         if self.training_running:
             return
 
+        version_raw = self.version_var.get().strip()
         try:
-            version = int(self.version_var.get().strip())
-            if version < 1:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Fehler", "Version muss eine ganze Zahl >= 1 sein.")
+            version = validate_version(version_raw)
+        except ValueError as exc:
+            messagebox.showerror("Fehler", str(exc))
             return
 
         size = self.size_var.get().strip().lower()
@@ -394,7 +399,7 @@ class TrainingUI:
         thread.start()
         self.root.after(150, self._poll_events)
 
-    def _worker(self, size: str, version: int) -> None:
+    def _worker(self, size: str, version: str) -> None:
         def callback(event: str, data: dict[str, Any]) -> None:
             self.event_queue.put((event, data))
 
