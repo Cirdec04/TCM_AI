@@ -12,6 +12,9 @@ import numpy as np
 
 from nn import SimpleMLP
 
+BASE_DIR = Path(__file__).resolve().parent
+MODELS_DIR = BASE_DIR / "models"
+
 
 class DigitApp:
     def __init__(self, root: tk.Tk, models_dir: Path) -> None:
@@ -64,6 +67,7 @@ class DigitApp:
         ttk.Label(result_frame, textvariable=self.result_var, justify="left").pack(anchor="w")
 
     def refresh_model_list(self) -> None:
+        self.models_dir.mkdir(parents=True, exist_ok=True)
         model_files = sorted([p.name for p in self.models_dir.glob("TCM-o*.npz")])
         self.model_combo["values"] = model_files
 
@@ -71,7 +75,7 @@ class DigitApp:
             self.model_var.set("")
             self.model = None
             self.model_name = None
-            self.result_var.set("Keine Modelle gefunden in ./models")
+            self.result_var.set(f"Keine Modelle gefunden in:\n{self.models_dir}")
             return
 
         if self.model_var.get() not in model_files:
@@ -92,7 +96,10 @@ class DigitApp:
             self.model = model
             self.model_name = selected
             size_info = metadata.get("size", "unbekannt")
-            self.result_var.set(f"Modell geladen: {selected} (size: {size_info})")
+            self.result_var.set(
+                f"Modell geladen: {selected} (size: {size_info})\n"
+                f"Ordner: {self.models_dir}"
+            )
         except Exception as exc:  # noqa: BLE001
             self.model = None
             self.model_name = None
@@ -146,7 +153,7 @@ class DigitApp:
 
 def main() -> None:
     root = tk.Tk()
-    models_dir = Path("models")
+    models_dir = MODELS_DIR
     app = DigitApp(root, models_dir=models_dir)
     root.mainloop()
 

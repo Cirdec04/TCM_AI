@@ -24,11 +24,14 @@ from nn import SimpleMLP, one_hot
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp"}
 TEST_RATIO = 0.2
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+MODELS_DIR = BASE_DIR / "models"
 
 MODEL_PROFILES: dict[str, dict[str, float | int]] = {
-    "mini": {"hidden_size": 64, "epochs": 12, "batch_size": 64, "learning_rate": 0.01},
-    "normal": {"hidden_size": 128, "epochs": 20, "batch_size": 64, "learning_rate": 0.008},
-    "pro": {"hidden_size": 256, "epochs": 35, "batch_size": 128, "learning_rate": 0.006},
+    "mini": {"hidden_size": 128, "epochs": 24, "batch_size": 128, "learning_rate": 0.02},
+    "normal": {"hidden_size": 256, "epochs": 40, "batch_size": 128, "learning_rate": 0.016},
+    "pro": {"hidden_size": 512, "epochs": 70, "batch_size": 256, "learning_rate": 0.012},
 }
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
@@ -154,9 +157,14 @@ def train_model(size: str, version: int, callback: ProgressCallback | None = Non
     if version < 1:
         raise ValueError("Version muss >= 1 sein.")
 
-    data_dir = Path("data")
-    models_dir = Path("models")
-    models_dir.mkdir(parents=True, exist_ok=True)
+    data_dir = DATA_DIR
+    models_dir = MODELS_DIR
+    try:
+        models_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise PermissionError(
+            f"Kein Schreibzugriff auf Modellordner: {models_dir}"
+        ) from exc
 
     profile = MODEL_PROFILES[size]
     hidden_size = int(profile["hidden_size"])
@@ -170,8 +178,11 @@ def train_model(size: str, version: int, callback: ProgressCallback | None = Non
     plot_path = models_dir / f"{model_name}_training.png"
     metadata_path = models_dir / f"{model_name}.json"
 
-    if model_path.exists() or metadata_path.exists():
-        raise FileExistsError(f"Modell '{model_name}' existiert bereits. Bitte andere Version waehlen.")
+    if model_path.exists() or metadata_path.exists() or plot_path.exists():
+        raise FileExistsError(
+            f"Artefakt fuer '{model_name}' existiert bereits (.npz/.json/.png). "
+            "Bitte andere Version waehlen."
+        )
 
     _emit(callback, "info", message=f"Lade Daten aus: {data_dir}")
     x, y = load_dataset_from_folders(data_dir)
@@ -258,9 +269,16 @@ def train_model(size: str, version: int, callback: ProgressCallback | None = Non
         },
     }
 
-    model.save(model_path, metadata=metadata)
-    save_training_plot(history, plot_path)
-    save_model_json(metadata, metadata_path)
+    try:
+        model.save(model_path, metadata=metadata)
+        save_training_plot(history, plot_path)
+        save_model_json(metadata, metadata_path)
+    except PermissionError as exc:
+        raise PermissionError(
+            "Kein Schreibzugriff auf den Ordner 'models' oder auf eine dort gesperrte Datei. "
+            "Bitte pruefe Dateirechte, schliesse geoeffnete Dateien (z. B. Plot/JSON), "
+            "und nutze eine neue Version."
+        ) from exc
 
     _emit(callback, "info", message="Training fertig.")
     _emit(callback, "info", message=f"Modell gespeichert: {model_path}")
