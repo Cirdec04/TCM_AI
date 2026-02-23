@@ -4,7 +4,7 @@
 
 - `data/`
   - Enthält zwei Unterordner: `training/` und `testing/`.
-  - Beide Unterordner haben jeweils die Struktur `0` bis `9`.
+  - Beide Unterordner haben jeweils die Unterordner `0` bis `9`.
   - In jedem Ziffernordner liegen die Bilddateien.
 - `models/`
   - Hier werden trainierte Modelle gespeichert.

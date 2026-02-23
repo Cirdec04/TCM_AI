@@ -51,8 +51,11 @@ def _emit(callback: ProgressCallback | None, event: str, **data: Any) -> None:
 
 
 def _load_image_as_vector(path: Path) -> np.ndarray:
-    image = Image.open(path).convert("L").resize((28, 28))
-    pixels = np.asarray(image, dtype=np.float32)
+    with Image.open(path) as image:
+        image = image.convert("L")
+        if image.size != (28, 28):
+            image = image.resize((28, 28))
+        pixels = np.asarray(image, dtype=np.float32)
 
     # Falls Hintergrund hell ist, invertieren wir auf "MNIST-Stil" (helle Ziffer auf dunklem Hintergrund).
     if float(pixels.mean()) > 127.0:
@@ -62,25 +65,40 @@ def _load_image_as_vector(path: Path) -> np.ndarray:
     return pixels.reshape(-1)
 
 
-def load_dataset_from_folders(data_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+def load_dataset_from_folders(
+    data_dir: Path,
+    callback: ProgressCallback | None = None,
+    dataset_label: str = "Daten",
+    progress_every: int = 500,
+) -> tuple[np.ndarray, np.ndarray]:
     features: list[np.ndarray] = []
     labels: list[int] = []
+    files_with_labels: list[tuple[int, Path]] = []
 
-    for label in range(10):
-        class_dir = data_dir / str(label)
+    for class_label in range(10):
+        class_dir = data_dir / str(class_label)
         if not class_dir.exists():
             continue
 
         files = sorted([p for p in class_dir.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS])
         for file_path in files:
-            features.append(_load_image_as_vector(file_path))
-            labels.append(label)
+            files_with_labels.append((class_label, file_path))
 
-    if not features:
+    if not files_with_labels:
         raise FileNotFoundError(
             f"Keine Trainingsdaten gefunden in '{data_dir}'. "
             "Erwartet werden Unterordner 0 bis 9 mit Bilddateien."
         )
+
+    total_files = len(files_with_labels)
+    _emit(callback, "info", message=f"{dataset_label}: {total_files} Dateien gefunden.")
+
+    for index, (digit_label, file_path) in enumerate(files_with_labels, start=1):
+        features.append(_load_image_as_vector(file_path))
+        labels.append(digit_label)
+
+        if index == 1 or index % progress_every == 0 or index == total_files:
+            _emit(callback, "info", message=f"{dataset_label}: {index}/{total_files} geladen.")
 
     x = np.vstack(features).astype(np.float32)
     y = np.array(labels, dtype=np.int64)
@@ -163,11 +181,11 @@ def train_model(size: str, version: int, callback: ProgressCallback | None = Non
         )
 
     _emit(callback, "info", message=f"Lade Trainingsdaten aus: {train_data_dir}")
-    x_train, y_train = load_dataset_from_folders(train_data_dir)
+    x_train, y_train = load_dataset_from_folders(train_data_dir, callback=callback, dataset_label="Training")
     _emit(callback, "info", message=f"Geladene Trainings-Samples: {len(y_train)}")
 
     _emit(callback, "info", message=f"Lade Testdaten aus: {test_data_dir}")
-    x_test, y_test = load_dataset_from_folders(test_data_dir)
+    x_test, y_test = load_dataset_from_folders(test_data_dir, callback=callback, dataset_label="Testing")
     _emit(callback, "info", message=f"Geladene Test-Samples: {len(y_test)}")
     _emit(
         callback,
