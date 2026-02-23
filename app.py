@@ -19,7 +19,7 @@ MODELS_DIR = BASE_DIR / "models"
 class DigitApp:
     def __init__(self, root: tk.Tk, models_dir: Path) -> None:
         self.root = root
-        self.root.title("KNN Ziffernerkennung")
+        self.root.title("TCM AI Digit Recognizer")
         self.root.resizable(False, False)
 
         self.models_dir = models_dir
@@ -34,7 +34,7 @@ class DigitApp:
         self.model_name: str | None = None
 
         self.model_var = tk.StringVar()
-        self.result_var = tk.StringVar(value="Noch keine Vorhersage.")
+        self.result_var = tk.StringVar(value="Noch keine Idee.")
 
         self._build_ui()
         self.refresh_model_list()
@@ -48,7 +48,7 @@ class DigitApp:
         self.model_combo.pack(side="left", padx=8)
         self.model_combo.bind("<<ComboboxSelected>>", self.on_model_changed)
 
-        ttk.Button(top_frame, text="Modelle neu laden", command=self.refresh_model_list).pack(side="left")
+        ttk.Button(top_frame, text="Refresh", command=self.refresh_model_list).pack(side="left")
 
         canvas_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         canvas_frame.pack()
@@ -62,7 +62,7 @@ class DigitApp:
         self.canvas.bind("<Button-3>", self.on_erase)
         ttk.Label(
             canvas_frame,
-            text=f"Zoom x{self.display_scale} (28x28 Raster) | Links: zeichnen | Rechts: radieren",
+            text=f"Zoom x{self.display_scale} (28x28 Raster) | Linksklick: zeichnen | Rechtsklick: radieren",
         ).pack(pady=(6, 0))
 
         buttons = ttk.Frame(self.root, padding=(10, 0, 10, 10))
@@ -105,7 +105,7 @@ class DigitApp:
             self.model_var.set("")
             self.model = None
             self.model_name = None
-            self.result_var.set(f"Keine Modelle gefunden in:\n{self.models_dir}")
+            self.result_var.set(f"Keine Modelle gefunden")
             return
 
         if self.model_var.get() not in model_files:
@@ -166,7 +166,7 @@ class DigitApp:
     def clear_canvas(self) -> None:
         self.grid.fill(0.0)
         self.canvas.itemconfig("pixel", fill="black")
-        self.result_var.set("Zeichnung geloescht. Zeichne eine Ziffer.")
+        self.result_var.set("Zeichnung gelöscht. Zeichne eine Ziffer.")
 
     def update_prediction(self, silent: bool = True) -> None:
         if self.model is None or self.model_name != self.model_var.get().strip():
@@ -183,7 +183,7 @@ class DigitApp:
         probs = self.model.predict_proba(x_input)[0]
         pred = int(np.argmax(probs))
 
-        lines = [f"Vorhersage: {pred}", "Wahrscheinlichkeiten pro Zahl (0-9):"]
+        lines = [f"Vorhersage: {pred}", "Wahrscheinlichkeiten pro Zahl:"]
         for idx in range(10):
             lines.append(f"  {idx}: {probs[idx] * 100:.2f}%")
         self.result_var.set("\n".join(lines))

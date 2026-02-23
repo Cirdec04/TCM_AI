@@ -58,7 +58,6 @@ def _load_image_as_vector(path: Path) -> np.ndarray:
             image = image.resize((28, 28))
         pixels = np.asarray(image, dtype=np.float32)
 
-    # Falls Hintergrund hell ist, invertieren wir auf "MNIST-Stil" (helle Ziffer auf dunklem Hintergrund).
     if float(pixels.mean()) > 127.0:
         pixels = 255.0 - pixels
 
@@ -84,12 +83,6 @@ def load_dataset_from_folders(
         files = sorted([p for p in class_dir.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS])
         for file_path in files:
             files_with_labels.append((class_label, file_path))
-
-    if not files_with_labels:
-        raise FileNotFoundError(
-            f"Keine Trainingsdaten gefunden in '{data_dir}'. "
-            "Erwartet werden Unterordner 0 bis 9 mit Bilddateien."
-        )
 
     total_files = len(files_with_labels)
     _emit(callback, "info", message=f"{dataset_label}: {total_files} Dateien gefunden.")
@@ -280,7 +273,7 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
     except PermissionError as exc:
         raise PermissionError(
             "Kein Schreibzugriff auf den Ordner 'models' oder auf eine dort gesperrte Datei. "
-            "Bitte pruefe Dateirechte, schliesse geoeffnete Dateien (z. B. Plot/JSON), "
+            "Bitte prüfe Dateirechte, schliesse geöffnete Dateien (z. B. Plot/JSON), "
             "und nutze eine neue Version."
         ) from exc
 
@@ -381,7 +374,7 @@ class TrainingUI:
 
         size = self.size_var.get().strip().lower()
         if size not in MODEL_PROFILES:
-            messagebox.showerror("Fehler", "Ungueltige Modellgroesse.")
+            messagebox.showerror("Fehler", "Ungültige Modellgrösse.")
             return
 
         self.training_running = True

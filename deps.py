@@ -32,20 +32,12 @@ def ensure_requirements_installed(
         raise SystemExit(f"Fehlende Datei: {requirements_path}")
 
     print(f"Fehlende Pakete erkannt: {', '.join(missing_before)}")
-    print(f"Installiere automatisch ueber: {requirements_path}")
+    print(f"Installiere automatisch über: {requirements_path}")
 
     cmd = [sys.executable, "-m", "pip", "install", "-r", str(requirements_path)]
     result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
         raise SystemExit(
-            "Abhaengigkeiten konnten nicht installiert werden. "
-            "Bitte `pip install -r requirements.txt` manuell ausfuehren."
-        )
-
-    missing_after = _missing_modules(required_modules)
-    if missing_after:
-        raise SystemExit(
-            "Diese Module fehlen weiterhin: "
-            + ", ".join(missing_after)
-            + ". Bitte Umgebung/Python-Interpreter pruefen."
+            "Abhängigkeiten konnten nicht installiert werden. "
+            "Bitte `pip install -r requirements.txt` manuell ausführen."
         )

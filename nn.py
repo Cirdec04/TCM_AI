@@ -31,7 +31,6 @@ class SimpleMLP:
         self.hidden_size = hidden_size
         self.output_size = output_size
 
-        # He-Init fuer ReLU.
         self.w1 = rng.normal(0.0, np.sqrt(2.0 / input_size), (input_size, hidden_size)).astype(np.float32)
         self.b1 = np.zeros((1, hidden_size), dtype=np.float32)
         self.w2 = rng.normal(0.0, np.sqrt(2.0 / hidden_size), (hidden_size, output_size)).astype(np.float32)
