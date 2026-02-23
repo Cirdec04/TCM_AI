@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import threading
+import time
 import tkinter as tk
 from datetime import datetime
 from pathlib import Path
@@ -30,9 +31,9 @@ TEST_DATA_DIR = DATA_DIR / "testing"
 MODELS_DIR = BASE_DIR / "models"
 
 MODEL_PROFILES: dict[str, dict[str, float | int]] = {
-    "mini": {"hidden_size": 128, "epochs": 64, "batch_size": 256, "learning_rate": 0.008},
-    "normal": {"hidden_size": 512, "epochs": 128, "batch_size": 256, "learning_rate": 0.005},
-    "pro": {"hidden_size": 2048, "epochs": 512, "batch_size": 512, "learning_rate": 0.003},
+    "mini": {"hidden_size": 128, "hidden_layers": 1, "epochs": 64, "batch_size": 256, "learning_rate": 0.008},
+    "normal": {"hidden_size": 512, "hidden_layers": 2, "epochs": 128, "batch_size": 256, "learning_rate": 0.005},
+    "pro": {"hidden_size": 2048, "hidden_layers": 3, "epochs": 512, "batch_size": 512, "learning_rate": 0.003},
 }
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
@@ -164,10 +165,13 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
 
     profile = MODEL_PROFILES[size]
     hidden_size = int(profile["hidden_size"])
+    hidden_layers = int(profile.get("hidden_layers", 1))
     epochs = int(profile["epochs"])
     batch_size = int(profile["batch_size"])
     learning_rate = float(profile["learning_rate"])
     seed = get_fixed_seed()
+    started_at = datetime.now()
+    timer_start = time.perf_counter()
 
     model_name = build_model_name(version=version, size=size)
     model_path = models_dir / f"{model_name}.npz"
@@ -192,12 +196,18 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
         "info",
         message=(
             "Training startet mit: "
-            f"size={size}, hidden_size={hidden_size}, epochs={epochs}, "
+            f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
             f"batch_size={batch_size}, learning_rate={learning_rate}, seed={seed}"
         ),
     )
 
-    model = SimpleMLP(input_size=28 * 28, hidden_size=hidden_size, output_size=10, seed=seed)
+    model = SimpleMLP(
+        input_size=28 * 28,
+        hidden_size=hidden_size,
+        hidden_layers=hidden_layers,
+        output_size=10,
+        seed=seed,
+    )
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
     rng = np.random.default_rng(seed)
 
@@ -241,13 +251,20 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
             test_acc=test_acc,
         )
 
+    duration_seconds = float(time.perf_counter() - timer_start)
+    finished_at = datetime.now()
+
     metadata: dict[str, object] = {
         "model_name": model_name,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": finished_at.isoformat(timespec="seconds"),
+        "training_started_at": started_at.isoformat(timespec="seconds"),
+        "training_finished_at": finished_at.isoformat(timespec="seconds"),
+        "training_duration_seconds": round(duration_seconds, 3),
         "train_data_dir": str(train_data_dir),
         "test_data_dir": str(test_data_dir),
         "size": size,
         "hidden_size": hidden_size,
+        "hidden_layers": hidden_layers,
         "epochs": epochs,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
@@ -278,6 +295,7 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
         ) from exc
 
     _emit(callback, "info", message="Training fertig.")
+    _emit(callback, "info", message=f"Trainingsdauer: {duration_seconds:.1f}s")
     _emit(callback, "info", message=f"Modell gespeichert: {model_path}")
     _emit(callback, "info", message=f"Plot gespeichert:   {plot_path}")
     _emit(callback, "info", message=f"JSON gespeichert:   {metadata_path}")
@@ -349,6 +367,7 @@ class TrainingUI:
         self.profile_label.config(
             text=(
                 f"Profile: hidden={int(profile['hidden_size'])}, "
+                f"layers={int(profile.get('hidden_layers', 1))}, "
                 f"epochs={int(profile['epochs'])}, "
                 f"batch={int(profile['batch_size'])}, "
                 f"lr={float(profile['learning_rate'])}"

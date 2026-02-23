@@ -1,0 +1,28 @@
+{
+  "model_name": "TCM-o3-pro",
+  "created_at": "2026-02-23T21:36:22",
+  "train_data_dir": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\data\\training",
+  "test_data_dir": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\data\\testing",
+  "size": "pro",
+  "hidden_size": 2048,
+  "epochs": 512,
+  "batch_size": 512,
+  "learning_rate": 0.003,
+  "seed": 42,
+  "samples": {
+    "total": 70000,
+    "train": 60000,
+    "test": 10000
+  },
+  "final_metrics": {
+    "train_loss": 0.12787589241387481,
+    "train_acc": 0.9654009975282486,
+    "test_loss": 0.1380312293767929,
+    "test_acc": 0.9603
+  },
+  "artifacts": {
+    "model_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o3-pro.npz",
+    "plot_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o3-pro_training.png",
+    "metadata_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o3-pro.json"
+  }
+}

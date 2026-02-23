@@ -23,18 +23,26 @@ class SimpleMLP:
         self,
         input_size: int = 28 * 28,
         hidden_size: int = 128,
+        hidden_layers: int = 1,
         output_size: int = 10,
         seed: int = 42,
     ) -> None:
         rng = np.random.default_rng(seed)
         self.input_size = input_size
         self.hidden_size = hidden_size
+        self.hidden_layers = max(1, int(hidden_layers))
         self.output_size = output_size
 
-        self.w1 = rng.normal(0.0, np.sqrt(2.0 / input_size), (input_size, hidden_size)).astype(np.float32)
-        self.b1 = np.zeros((1, hidden_size), dtype=np.float32)
-        self.w2 = rng.normal(0.0, np.sqrt(2.0 / hidden_size), (hidden_size, output_size)).astype(np.float32)
-        self.b2 = np.zeros((1, output_size), dtype=np.float32)
+        layer_sizes = [self.input_size] + [self.hidden_size] * self.hidden_layers + [self.output_size]
+        self.layer_sizes = layer_sizes
+
+        self.weights: list[np.ndarray] = []
+        self.biases: list[np.ndarray] = []
+        for prev_size, next_size in zip(layer_sizes[:-1], layer_sizes[1:], strict=False):
+            self.weights.append(
+                rng.normal(0.0, np.sqrt(2.0 / prev_size), (prev_size, next_size)).astype(np.float32)
+            )
+            self.biases.append(np.zeros((1, next_size), dtype=np.float32))
 
     @staticmethod
     def _relu(x: np.ndarray) -> np.ndarray:
@@ -50,12 +58,23 @@ class SimpleMLP:
         exp_values = np.exp(shifted)
         return exp_values / np.sum(exp_values, axis=1, keepdims=True)
 
-    def forward(self, x: np.ndarray) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-        z1 = x @ self.w1 + self.b1
-        a1 = self._relu(z1)
-        z2 = a1 @ self.w2 + self.b2
-        probs = self._softmax(z2)
-        cache = {"x": x, "z1": z1, "a1": a1, "probs": probs}
+    def forward(self, x: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+        activations: list[np.ndarray] = [x]
+        pre_activations: list[np.ndarray] = []
+
+        a = x
+        for layer_idx in range(len(self.weights) - 1):
+            z = a @ self.weights[layer_idx] + self.biases[layer_idx]
+            a = self._relu(z)
+            pre_activations.append(z)
+            activations.append(a)
+
+        z_out = a @ self.weights[-1] + self.biases[-1]
+        probs = self._softmax(z_out)
+        pre_activations.append(z_out)
+        activations.append(probs)
+
+        cache = {"activations": activations, "pre_activations": pre_activations, "probs": probs}
         return probs, cache
 
     @staticmethod
@@ -68,19 +87,26 @@ class SimpleMLP:
         probs, cache = self.forward(x_batch)
 
         batch_size = x_batch.shape[0]
-        dz2 = (probs - y_batch_one_hot) / batch_size
-        dw2 = cache["a1"].T @ dz2
-        db2 = np.sum(dz2, axis=0, keepdims=True)
+        activations = cache["activations"]
+        pre_activations = cache["pre_activations"]
 
-        da1 = dz2 @ self.w2.T
-        dz1 = da1 * self._relu_derivative(cache["z1"])
-        dw1 = cache["x"].T @ dz1
-        db1 = np.sum(dz1, axis=0, keepdims=True)
+        grads_w: list[np.ndarray] = [np.empty_like(w) for w in self.weights]
+        grads_b: list[np.ndarray] = [np.empty_like(b) for b in self.biases]
 
-        self.w2 -= learning_rate * dw2
-        self.b2 -= learning_rate * db2
-        self.w1 -= learning_rate * dw1
-        self.b1 -= learning_rate * db1
+        dz = (probs - y_batch_one_hot) / batch_size
+        last_idx = len(self.weights) - 1
+        grads_w[last_idx] = activations[last_idx].T @ dz
+        grads_b[last_idx] = np.sum(dz, axis=0, keepdims=True)
+
+        for layer_idx in range(last_idx - 1, -1, -1):
+            da = dz @ self.weights[layer_idx + 1].T
+            dz = da * self._relu_derivative(pre_activations[layer_idx])
+            grads_w[layer_idx] = activations[layer_idx].T @ dz
+            grads_b[layer_idx] = np.sum(dz, axis=0, keepdims=True)
+
+        for layer_idx in range(len(self.weights)):
+            self.weights[layer_idx] -= learning_rate * grads_w[layer_idx]
+            self.biases[layer_idx] -= learning_rate * grads_b[layer_idx]
 
         loss = self.cross_entropy_loss(probs, y_batch_one_hot)
         predictions = np.argmax(probs, axis=1)
@@ -106,30 +132,64 @@ class SimpleMLP:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         metadata = metadata or {}
-        np.savez(
-            target,
-            w1=self.w1,
-            b1=self.b1,
-            w2=self.w2,
-            b2=self.b2,
-            input_size=self.input_size,
-            hidden_size=self.hidden_size,
-            output_size=self.output_size,
-            metadata=json.dumps(metadata),
-        )
+        payload: dict[str, Any] = {
+            "input_size": self.input_size,
+            "hidden_size": self.hidden_size,
+            "hidden_layers": self.hidden_layers,
+            "output_size": self.output_size,
+            "layer_sizes": np.array(self.layer_sizes, dtype=np.int32),
+            "metadata": json.dumps(metadata),
+        }
+        for idx, (weight, bias) in enumerate(zip(self.weights, self.biases, strict=False), start=1):
+            payload[f"w{idx}"] = weight
+            payload[f"b{idx}"] = bias
+        np.savez(target, **payload)
 
     @classmethod
     def load(cls, path: str | Path) -> tuple["SimpleMLP", dict[str, Any]]:
         source = Path(path)
         with np.load(source, allow_pickle=False) as data:
+            keys = set(data.files)
             input_size = int(data["input_size"])
             hidden_size = int(data["hidden_size"])
             output_size = int(data["output_size"])
-            model = cls(input_size=input_size, hidden_size=hidden_size, output_size=output_size)
-            model.w1 = data["w1"].astype(np.float32)
-            model.b1 = data["b1"].astype(np.float32)
-            model.w2 = data["w2"].astype(np.float32)
-            model.b2 = data["b2"].astype(np.float32)
+            hidden_layers = int(data["hidden_layers"]) if "hidden_layers" in keys else 1
+
+            model = cls(
+                input_size=input_size,
+                hidden_size=hidden_size,
+                hidden_layers=hidden_layers,
+                output_size=output_size,
+            )
+
+            if "layer_sizes" in keys:
+                total_layers = len(np.array(data["layer_sizes"]).tolist()) - 1
+            else:
+                total_layers = hidden_layers + 1
+
+            model.weights = []
+            model.biases = []
+            for idx in range(1, total_layers + 1):
+                w_key = f"w{idx}"
+                b_key = f"b{idx}"
+                if w_key not in keys or b_key not in keys:
+                    continue
+                model.weights.append(data[w_key].astype(np.float32))
+                model.biases.append(data[b_key].astype(np.float32))
+
+            if not model.weights or not model.biases:
+                model.weights = [data["w1"].astype(np.float32), data["w2"].astype(np.float32)]
+                model.biases = [data["b1"].astype(np.float32), data["b2"].astype(np.float32)]
+                model.hidden_layers = 1
+
+            model.layer_sizes = [model.weights[0].shape[0]]
+            for weight in model.weights:
+                model.layer_sizes.append(weight.shape[1])
+            model.hidden_size = model.layer_sizes[1] if len(model.layer_sizes) > 2 else hidden_size
+            model.output_size = model.layer_sizes[-1]
+            model.input_size = model.layer_sizes[0]
+            model.hidden_layers = len(model.weights) - 1
+
             metadata_raw = str(data["metadata"])
 
         metadata: dict[str, Any]
