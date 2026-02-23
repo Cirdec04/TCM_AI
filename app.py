@@ -4,6 +4,10 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+from deps import ensure_requirements_installed
+
+ensure_requirements_installed()
+
 import numpy as np
 
 from nn import SimpleMLP

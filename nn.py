@@ -4,6 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from deps import ensure_requirements_installed
+
+ensure_requirements_installed()
+
 import numpy as np
 
 

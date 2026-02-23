@@ -4,17 +4,13 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
+from deps import ensure_requirements_installed
+
+ensure_requirements_installed(required_modules=("numpy", "matplotlib", "PIL"))
+
 import numpy as np
-
-try:
-    import matplotlib.pyplot as plt
-except ModuleNotFoundError:
-    plt = None
-
-try:
-    from PIL import Image
-except ModuleNotFoundError as exc:
-    raise SystemExit("Fehlende Abhaengigkeit: Pillow. Bitte `pip install -r requirements.txt` ausfuehren.") from exc
+import matplotlib.pyplot as plt
+from PIL import Image
 
 from nn import SimpleMLP, one_hot
 
@@ -212,10 +208,7 @@ def prompt_for_training_settings(args: argparse.Namespace, models_dir: Path) -> 
     return args
 
 
-def save_training_plot(history: dict[str, list[float]], output_path: Path) -> bool:
-    if plt is None:
-        return False
-
+def save_training_plot(history: dict[str, list[float]], output_path: Path) -> None:
     epochs = np.arange(1, len(history["train_loss"]) + 1)
 
     plt.figure(figsize=(10, 4))
@@ -240,7 +233,6 @@ def save_training_plot(history: dict[str, list[float]], output_path: Path) -> bo
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=120)
     plt.close()
-    return True
 
 
 def main() -> None:
@@ -329,14 +321,11 @@ def main() -> None:
     }
 
     model.save(model_path, metadata=metadata)
-    plot_written = save_training_plot(history, plot_path)
+    save_training_plot(history, plot_path)
 
     print("\nTraining fertig.")
     print(f"Modell gespeichert: {model_path}")
-    if plot_written:
-        print(f"Plot gespeichert:   {plot_path}")
-    else:
-        print("Plot uebersprungen: matplotlib nicht installiert.")
+    print(f"Plot gespeichert:   {plot_path}")
     print(f"Finale Test-Accuracy: {history['test_acc'][-1]:.4f}")
 
 
