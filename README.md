@@ -3,9 +3,9 @@
 ## Projektstruktur
 
 - `data/`
-  - Trainingsdaten liegen hier.
-  - Struktur: pro Ziffer ein Ordner `0` bis `9`.
-  - In jedem Ordner sind durchnummerierte Bilddateien.
+  - Enthält zwei Unterordner: `training/` und `testing/`.
+  - Beide Unterordner haben jeweils die Struktur `0` bis `9`.
+  - In jedem Ziffernordner liegen die Bilddateien.
 - `models/`
   - Hier werden trainierte Modelle gespeichert.
   - Naming-Schema: `TCM-o<version><size-tag>`
@@ -46,4 +46,4 @@
 
 ## Datenquelle
 
-- Reduced MNIST: `https://www.kaggle.com/datasets/mohamedgamal07/reduced-mnist` / gespeichert unter /data
+- Reduced MNIST: `https://www.kaggle.com/datasets/mohamedgamal07/reduced-mnist` / gespeichert unter `data/training` und `data/testing`

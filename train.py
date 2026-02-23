@@ -22,9 +22,10 @@ from nn import SimpleMLP, one_hot
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp"}
-TEST_RATIO = 0.2
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
+TRAIN_DATA_DIR = DATA_DIR / "training"
+TEST_DATA_DIR = DATA_DIR / "testing"
 MODELS_DIR = BASE_DIR / "models"
 
 MODEL_PROFILES: dict[str, dict[str, float | int]] = {
@@ -86,29 +87,6 @@ def load_dataset_from_folders(data_dir: Path) -> tuple[np.ndarray, np.ndarray]:
     return x, y
 
 
-def split_train_test(
-    x: np.ndarray,
-    y: np.ndarray,
-    test_ratio: float,
-    seed: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    rng = np.random.default_rng(seed)
-    indices = np.arange(x.shape[0])
-    rng.shuffle(indices)
-
-    test_size = int(len(indices) * test_ratio)
-    test_size = max(1, test_size)
-    test_size = min(len(indices) - 1, test_size)
-    test_indices = indices[:test_size]
-    train_indices = indices[test_size:]
-
-    x_train = x[train_indices]
-    y_train = y[train_indices]
-    x_test = x[test_indices]
-    y_test = y[test_indices]
-    return x_train, y_train, x_test, y_test
-
-
 def build_model_name(version: int, size: str) -> str:
     suffix = "" if size == "normal" else f"-{size}"
     return f"TCM-o{version}{suffix}"
@@ -156,7 +134,8 @@ def train_model(size: str, version: int, callback: ProgressCallback | None = Non
     if version < 1:
         raise ValueError("Version muss >= 1 sein.")
 
-    data_dir = DATA_DIR
+    train_data_dir = TRAIN_DATA_DIR
+    test_data_dir = TEST_DATA_DIR
     models_dir = MODELS_DIR
     try:
         models_dir.mkdir(parents=True, exist_ok=True)
@@ -183,12 +162,13 @@ def train_model(size: str, version: int, callback: ProgressCallback | None = Non
             "Bitte andere Version waehlen."
         )
 
-    _emit(callback, "info", message=f"Lade Daten aus: {data_dir}")
-    x, y = load_dataset_from_folders(data_dir)
-    _emit(callback, "info", message=f"Geladene Samples: {len(y)}")
+    _emit(callback, "info", message=f"Lade Trainingsdaten aus: {train_data_dir}")
+    x_train, y_train = load_dataset_from_folders(train_data_dir)
+    _emit(callback, "info", message=f"Geladene Trainings-Samples: {len(y_train)}")
 
-    x_train, y_train, x_test, y_test = split_train_test(x, y, TEST_RATIO, seed)
-    _emit(callback, "info", message=f"Train: {len(y_train)} | Test: {len(y_test)}")
+    _emit(callback, "info", message=f"Lade Testdaten aus: {test_data_dir}")
+    x_test, y_test = load_dataset_from_folders(test_data_dir)
+    _emit(callback, "info", message=f"Geladene Test-Samples: {len(y_test)}")
     _emit(
         callback,
         "info",
@@ -246,15 +226,15 @@ def train_model(size: str, version: int, callback: ProgressCallback | None = Non
     metadata: dict[str, object] = {
         "model_name": model_name,
         "created_at": datetime.now().isoformat(timespec="seconds"),
-        "data_dir": str(data_dir),
+        "train_data_dir": str(train_data_dir),
+        "test_data_dir": str(test_data_dir),
         "size": size,
         "hidden_size": hidden_size,
         "epochs": epochs,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
-        "test_ratio": TEST_RATIO,
         "seed": seed,
-        "samples": {"total": int(len(y)), "train": int(len(y_train)), "test": int(len(y_test))},
+        "samples": {"total": int(len(y_train) + len(y_test)), "train": int(len(y_train)), "test": int(len(y_test))},
         "final_metrics": {
             "train_loss": float(history["train_loss"][-1]),
             "train_acc": float(history["train_acc"][-1]),
