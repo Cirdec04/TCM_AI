@@ -95,7 +95,8 @@ Alle Modelle liegen in `models/` als:
 
 - Daten: 60'000 Train / 10'000 Test (aus `data/training` und `data/testing`).
 - Änderung ggü. `TCM-o3`:  Optimiertere Parameter. Anstatt 1 nun 2-3 Hidden Layers.
+
 | Modell        | Daten (Train/Test) | hidden | epochs | batch size | Learning Rate | finale Test-Accuracy |
 |---|---:|---:|---:|---:|---:|---:|
-| `TCM-o4-mini` | 60'000 / 10'000    | 256    | 96     | 128   | 0.0025 | 0.9608 (which is BETTER than TCM-o3-pro)     |
+| `TCM-o4-mini` | 60'000 / 10'000    | 256    | 96     | 128   | 0.0025 | 0.9608 |
 | `TCM-o4`      | 60'000 / 10'000    | 512    | 192    | 128   | 0.0015 | 0.9652          |
