@@ -92,3 +92,11 @@ Test-Accuracy |
 | `TCM-o3-mini` | 60'000 / 10'000    | 128    | 64     | 256   | 0.008 | 0.9431          |
 | `TCM-o3`      | 60'000 / 10'000    | 512    | 128    | 256   | 0.005 | 0.9526          |
 | `TCM-o3-pro`  | 60'000 / 10'000    | 2048   | 512    | 512   | 0.003 | 0.9603          |
+
+### Familie `TCM-o4` (Full Dataset, hidden layers)
+
+- Daten: 60'000 Train / 10'000 Test (aus `data/training` und `data/testing`).
+- Änderung ggü. `TCM-o3`:  Optimiertere Parameter. Anstatt 1 nun 2-3 Hidden Layers.
+| Modell        | Daten (Train/Test) | hidden | epochs | batch size | Learning Rate | finale Test-Accuracy |
+|---|---:|---:|---:|---:|---:|---:|
+| `TCM-o4-mini` | 60'000 / 10'000    | 256    | 96     | 128   | 0.0025 | 0.9608          |
