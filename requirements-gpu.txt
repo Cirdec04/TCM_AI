@@ -1,2 +1,4 @@
 # Optional GPU backend for AMD/NVIDIA via OpenCL
 pyopencl
+mako
+pytools
