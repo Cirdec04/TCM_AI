@@ -59,34 +59,31 @@ Alle Modelle liegen in `models/` als:
 - `.json` – Metadaten (u. a. Samples + Hyperparameter + finale Metriken)
 - `*_training.png` – Trainingskurve (Loss/Accuracy)
 
-### Familie `TCM-o1` (Reduced MNIST, interner Split)
+### Familie `TCM-o1` (First test trained in seconds on a Laptop)
 
 - Daten: 10'000 total → 8'000 Train / 2'000 Test (80/20 Split aus `data/`).
 
-| Modell | Daten (Train/Test) | hidden | epochs | batch | lr | finale Test-Acc |
-|---|---:|---:|---:|---:|---:|---:|
-| `TCM-o1-mini` | 8'000 / 2'000 | 128 | 128 | 256 | 0.008 | 0.9185 |
-| `TCM-o1` | 8'000 / 2'000 | 512 | 256 | 256 | 0.005 | 0.9125 |
-| `TCM-o1-pro` | 8'000 / 2'000 | 2048 | 512 | 512 | 0.003 | 0.9145 |
+| Modell        | Daten (Train/Test) | hidden | epochs | batch | lr    | finale Test-Acc |
+| `TCM-o1-mini` | 8'000 / 2'000      | 128    | 128    | 256   | 0.008 | 0.9185          |
+| `TCM-o1`      | 8'000 / 2'000      | 512    | 256    | 256   | 0.005 | 0.9125          |
+| `TCM-o1-pro`  | 8'000 / 2'000      | 2048   | 512    | 512   | 0.003 | 0.9145          |
 
-### Familie `TCM-o2` (Reduced MNIST, feste Train/Test-Ordner)
+### Familie `TCM-o2` (Optimierte o1, könnte auf o1.1 genannt worden sein...)
 
 - Daten: 10'000 Train / 2'000 Test (aus `data/training` und `data/testing`).
 - Änderung ggü. `TCM-o1`: Wechsel von internem Split auf feste Ordner und fester Seed (42). Optimiertere Parameter.
 
-| Modell | Daten (Train/Test) | hidden | epochs | batch | lr | finale Test-Acc |
-|---|---:|---:|---:|---:|---:|---:|
-| `TCM-o2-mini` | 10'000 / 2'000 | 128 | 64 | 256 | 0.008 | 0.9250 |
-| `TCM-o2` | 10'000 / 2'000 | 512 | 128 | 256 | 0.005 | 0.9370 |
-| `TCM-o2-pro` | 10'000 / 2'000 | 2048 | 512 | 512 | 0.003 | 0.9485 |
+| Modell        | Daten (Train/Test) | hidden | epochs | batch | lr    | finale Test-Acc |
+| `TCM-o2-mini` | 10'000 / 2'000     | 128    | 64     | 256   | 0.008 | 0.9250          |
+| `TCM-o2`      | 10'000 / 2'000     | 512    | 128    | 256   | 0.005 | 0.9370          |
+| `TCM-o2-pro`  | 10'000 / 2'000     | 2048   | 512    | 512   | 0.003 | 0.9485          |
 
-### Familie `TCM-o3` (MNIST PNG, Full Dataset)
+### Familie `TCM-o3` (FULL DATASET and better Parameters)
 
 - Daten: 60'000 Train / 10'000 Test (aus `data/training` und `data/testing`).
 - Änderung ggü. `TCM-o2`: Wechsel von Reduced-Dataset (10'000/2'000) auf Full-Dataset (60'000/10'000). Optimiertere Parameter.
 
-| Modell | Daten (Train/Test) | hidden | epochs | batch | lr | finale Test-Acc |
-|---|---:|---:|---:|---:|---:|---:|
-| `TCM-o3-mini` | 60'000 / 10'000 | 128 | 64 | 256 | 0.008 | 0.9431 |
-| `TCM-o3` | 60'000 / 10'000 | 512 | 128 | 256 | 0.005 | 0.9526 |
-| `TCM-o3-pro` | 60'000 / 10'000 | 2048 | 512 | 512 | 0.003 | 0.9603 |
+| Modell        | Daten (Train/Test) | hidden | epochs | batch | lr    | finale Test-Acc |
+| `TCM-o3-mini` | 60'000 / 10'000    | 128    | 64     | 256   | 0.008 | 0.9431          |
+| `TCM-o3`      | 60'000 / 10'000    | 512    | 128    | 256   | 0.005 | 0.9526          |
+| `TCM-o3-pro`  | 60'000 / 10'000    | 2048   | 512    | 512   | 0.003 | 0.9603          |
