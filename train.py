@@ -32,23 +32,26 @@ MODELS_DIR = BASE_DIR / "models"
 MODEL_PROFILES = {
 "mini": {
     "hidden_size": 256,
-    "epochs": 64,
+    "hidden_layers": 2,
+    "epochs": 96,
     "batch_size": 128,
-    "learning_rate": 0.003,
+    "learning_rate": 0.0025,
 },
 
 "normal": {
     "hidden_size": 512,
-    "epochs": 128,
+    "hidden_layers": 2,
+    "epochs": 192,
     "batch_size": 128,
-    "learning_rate": 0.002,
+    "learning_rate": 0.0015,
 },
 
 "pro": {
-    "hidden_size": 1024,
-    "epochs": 384,
+    "hidden_size": 2048,
+    "hidden_layers": 3,
+    "epochs": 512,
     "batch_size": 128,
-    "learning_rate": 0.0015,
+    "learning_rate": 0.001,
 }
 }
 
@@ -187,6 +190,7 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
 
     profile = MODEL_PROFILES[size]
     hidden_size = int(profile["hidden_size"])
+    hidden_layers = int(profile["hidden_layers"])
     epochs = int(profile["epochs"])
     batch_size = int(profile["batch_size"])
     learning_rate = float(profile["learning_rate"])
@@ -215,12 +219,18 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
         "info",
         message=(
             "Training startet mit: "
-            f"size={size}, hidden_size={hidden_size}, epochs={epochs}, "
+            f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
             f"batch_size={batch_size}, learning_rate={learning_rate}, seed={seed}"
         ),
     )
 
-    model = SimpleMLP(input_size=28 * 28, hidden_size=hidden_size, output_size=10, seed=seed)
+    model = SimpleMLP(
+        input_size=28 * 28,
+        hidden_size=hidden_size,
+        hidden_layers=hidden_layers,
+        output_size=10,
+        seed=seed,
+    )
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
     rng = np.random.default_rng(seed)
 
@@ -271,6 +281,7 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
         "test_data_dir": str(test_data_dir),
         "size": size,
         "hidden_size": hidden_size,
+        "hidden_layers": hidden_layers,
         "epochs": epochs,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
@@ -379,6 +390,7 @@ class TrainingUI:
         self.profile_label.config(
             text=(
                 f"Profile: hidden={int(profile['hidden_size'])}, "
+                f"layers={int(profile['hidden_layers'])}, "
                 f"epochs={int(profile['epochs'])}, "
                 f"batch={int(profile['batch_size'])}, "
                 f"lr={float(profile['learning_rate'])}"
