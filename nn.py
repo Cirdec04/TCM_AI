@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 from pathlib import Path
 from typing import Any
 
@@ -9,21 +10,70 @@ from deps import ensure_requirements_installed
 ensure_requirements_installed()
 
 import numpy as np
-try:
-    # Compute backend option: GPU via CuPy (falls installiert), sonst CPU via NumPy.
-    import cupy as cp  # Optional: GPU backend via CuPy
-except Exception:  # noqa: BLE001
-    cp = None
+_CUPY_LOAD_ATTEMPTED = False
+_CUPY_MODULE: Any | None = None
+_CUPY_LOAD_ERROR: str | None = None
 
 
-def resolve_compute_backend(requested_backend: str) -> tuple[str, str | None]:
+def _load_cupy_module() -> tuple[Any | None, str | None]:
+    global _CUPY_LOAD_ATTEMPTED, _CUPY_MODULE, _CUPY_LOAD_ERROR
+    if _CUPY_LOAD_ATTEMPTED:
+        return _CUPY_MODULE, _CUPY_LOAD_ERROR
+    _CUPY_LOAD_ATTEMPTED = True
+    try:
+        _CUPY_MODULE = importlib.import_module("cupy")
+        _CUPY_LOAD_ERROR = None
+    except Exception as exc:  # noqa: BLE001
+        _CUPY_MODULE = None
+        _CUPY_LOAD_ERROR = str(exc)
+    return _CUPY_MODULE, _CUPY_LOAD_ERROR
+
+
+def _probe_cupy_backend(cp_module: Any) -> tuple[bool, str | None, dict[str, Any]]:
+    info: dict[str, Any] = {"provider": "cupy"}
+    try:
+        runtime = cp_module.cuda.runtime
+        is_hip = bool(getattr(runtime, "is_hip", False))
+        info["runtime"] = "rocm" if is_hip else "cuda"
+
+        device_count = int(runtime.getDeviceCount())
+        info["device_count"] = device_count
+        if device_count <= 0:
+            return False, "Keine GPU-Geraete gefunden.", info
+
+        props = runtime.getDeviceProperties(0)
+        name_raw = props.get("name") if isinstance(props, dict) else None
+        if isinstance(name_raw, bytes):
+            info["device_name"] = name_raw.decode("utf-8", errors="ignore")
+        elif name_raw is not None:
+            info["device_name"] = str(name_raw)
+
+        # Kleine Probe-Allokation/Kernel, um fruehe Runtime-Probleme sauber zu erkennen.
+        test = cp_module.asarray(np.array([1.0, 2.0], dtype=np.float32))
+        _ = float(cp_module.asnumpy(cp_module.sum(test)))
+        return True, None, info
+    except Exception as exc:  # noqa: BLE001
+        return False, f"GPU-Initialisierung fehlgeschlagen: {exc}", info
+
+
+def resolve_compute_backend(requested_backend: str) -> tuple[str, str | None, Any, dict[str, Any]]:
     # Zentraler Schalter fuer CPU/GPU-Auswahl mit sauberem Fallback.
     value = (requested_backend or "cpu").strip().lower()
+    if value == "cpu":
+        return "cpu", None, np, {"provider": "numpy", "runtime": "cpu"}
     if value not in {"cpu", "gpu"}:
-        return "cpu", f"Unbekannter Backend-Wert '{requested_backend}', nutze CPU."
-    if value == "gpu" and cp is None:
-        return "cpu", "GPU angefragt, aber CuPy ist nicht verfuegbar. Nutze CPU."
-    return value, None
+        return "cpu", f"Unbekannter Backend-Wert '{requested_backend}', nutze CPU.", np, {"provider": "numpy", "runtime": "cpu"}
+
+    cp_module, load_error = _load_cupy_module()
+    if cp_module is None:
+        reason = load_error or "CuPy konnte nicht geladen werden."
+        return "cpu", f"GPU angefragt, aber CuPy ist nicht verfuegbar ({reason}). Nutze CPU.", np, {"provider": "numpy", "runtime": "cpu"}
+
+    ok, probe_note, backend_info = _probe_cupy_backend(cp_module)
+    if not ok:
+        return "cpu", f"GPU angefragt, aber nicht nutzbar ({probe_note}). Nutze CPU.", np, backend_info
+
+    return "gpu", None, cp_module, backend_info
 
 
 def one_hot(labels: Any, num_classes: int = 10, xp: Any = np) -> Any:
@@ -44,8 +94,7 @@ class SimpleMLP:
         backend: str = "cpu",
     ) -> None:
         self.requested_backend = backend
-        self.backend, self.backend_note = resolve_compute_backend(backend)
-        self.xp = cp if self.backend == "gpu" else np
+        self.backend, self.backend_note, self.xp, self.backend_info = resolve_compute_backend(backend)
 
         rng = np.random.default_rng(seed)
         self.input_size = input_size
@@ -231,8 +280,8 @@ class SimpleMLP:
         return self.xp.asarray(value, dtype=dtype)
 
     def to_numpy(self, value: Any) -> np.ndarray:
-        if self.backend == "gpu" and cp is not None:
-            return cp.asnumpy(value)
+        if self.backend == "gpu" and hasattr(self.xp, "asnumpy"):
+            return self.xp.asnumpy(value)
         return np.asarray(value)
 
     def _to_float(self, value: Any) -> float:

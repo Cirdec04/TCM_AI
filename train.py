@@ -238,12 +238,14 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
     if model.backend_note:
         _emit(callback, "info", message=model.backend_note)
     _emit(callback, "info", message=f"Aktives Backend: {model.backend.upper()}")
+    if model.backend_info:
+        _emit(callback, "info", message=f"Backend-Details: {model.backend_info}")
 
     xp = model.xp
-    x_train_device = model.asarray(x_train, dtype=xp.float32)
-    y_train_device = model.asarray(y_train, dtype=xp.int64)
-    x_test_device = model.asarray(x_test, dtype=xp.float32)
-    y_test_device = model.asarray(y_test, dtype=xp.int64)
+    x_train_backend = model.asarray(x_train, dtype=xp.float32)
+    y_train_backend = model.asarray(y_train, dtype=xp.int64)
+    x_test_backend = model.asarray(x_test, dtype=xp.float32)
+    y_test_backend = model.asarray(y_test, dtype=xp.int64)
 
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
     rng = np.random.default_rng(seed)
@@ -255,12 +257,12 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
         indices = np.arange(x_train.shape[0])
         rng.shuffle(indices)
         if model.backend == "gpu":
-            indices_device = model.asarray(indices, dtype=xp.int64)
-            x_train_shuffled = x_train_device[indices_device]
-            y_train_shuffled = y_train_device[indices_device]
+            indices_backend = model.asarray(indices, dtype=xp.int64)
+            x_train_shuffled = x_train_backend[indices_backend]
+            y_train_shuffled = y_train_backend[indices_backend]
         else:
-            x_train_shuffled = x_train_device[indices]
-            y_train_shuffled = y_train_device[indices]
+            x_train_shuffled = x_train_backend[indices]
+            y_train_shuffled = y_train_backend[indices]
 
         batch_losses: list[float] = []
         batch_accs: list[float] = []
@@ -276,7 +278,7 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
 
         train_loss = float(np.mean(batch_losses))
         train_acc = float(np.mean(batch_accs))
-        test_loss, test_acc = model.evaluate(x_test_device, y_test_device)
+        test_loss, test_acc = model.evaluate(x_test_backend, y_test_backend)
 
         history["train_loss"].append(train_loss)
         history["train_acc"].append(train_acc)
@@ -311,6 +313,7 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
         "requested_backend": device,
         "active_backend": model.backend,
         "backend_note": model.backend_note,
+        "backend_info": model.backend_info,
         "samples": {"total": int(len(y_train) + len(y_test)), "train": int(len(y_train)), "test": int(len(y_test))},
         "final_metrics": {
             "train_loss": float(history["train_loss"][-1]),

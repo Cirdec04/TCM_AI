@@ -46,9 +46,13 @@
 
 ## Rechenbackend (CPU/GPU)
 
-- CPU-Berechnung wird mit `NumPy` ausgeführt wie es auch im Auftrag vorgegeben ist.
-- Training und App unterstuetzen eine Backend-Auswahl: `cpu` oder `gpu`.
-- Wir sind nicht sicher ob es erlaubt ist, aber es ist auf beide arten möglich, GPU ist aber viel schneller, vor allem bei pro modellen
+- CPU-Berechnung wird mit `NumPy` ausgeführt.
+- Training und App unterstützen eine Backend-Auswahl: `cpu` oder `gpu`.
+- GPU-Betrieb ist für AMD-GPUs vorgesehen (ROCm-kompatibles CuPy-Setup).
+- Beim Start wird das GPU-Backend aktiv geprüft. Wenn es nicht initialisiert werden kann, wird sauber auf CPU zurückgefallen und ein Hinweis angezeigt.
+- Im GPU-Modus werden Trainings- und Testdaten einmalig ins Backend geladen und dann dort verarbeitet (keine ständigen CPU-GPU-Transfers pro Schritt).
+- Das Lernen bleibt Mini-Batch-basiert (SGD), damit Speicher und Rechenlast stabil bleiben.
+- In den Modell-Metadaten (`models/*.json`) werden `requested_backend`, `active_backend`, `backend_note` und `backend_info` gespeichert.
 
 ## Datenquelle
 
