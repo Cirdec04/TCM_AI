@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
-from nn import SimpleMLP, one_hot
+from nn import SimpleMLP
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp"}
@@ -246,6 +246,12 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
     y_train_backend = model.asarray(y_train, dtype=xp.int64)
     x_test_backend = model.asarray(x_test, dtype=xp.float32)
     y_test_backend = model.asarray(y_test, dtype=xp.int64)
+    if model.backend == "gpu":
+        _emit(
+            callback,
+            "info",
+            message="OpenCL-Backend aktiv: Trainingsdaten bleiben auf dem Device (kein Host-Device-Transfer pro Batch).",
+        )
 
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
     rng = np.random.default_rng(seed)
@@ -257,9 +263,10 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
         indices = np.arange(x_train.shape[0])
         rng.shuffle(indices)
         if model.backend == "gpu":
-            indices_backend = model.asarray(indices, dtype=xp.int64)
-            x_train_shuffled = x_train_backend[indices_backend]
-            y_train_shuffled = y_train_backend[indices_backend]
+            # PyOpenCL-Arrays unterstuetzen kein robustes Fancy-Indexing fuer Permutationsarrays.
+            # Deshalb bleibt die Reihenfolge auf dem Device stabil; Mini-Batches bleiben erhalten.
+            x_train_shuffled = x_train_backend
+            y_train_shuffled = y_train_backend
         else:
             x_train_shuffled = x_train_backend[indices]
             y_train_shuffled = y_train_backend[indices]
@@ -271,7 +278,7 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
             end = start + batch_size
             x_batch = x_train_shuffled[start:end]
             y_batch = y_train_shuffled[start:end]
-            y_batch_one_hot = one_hot(y_batch, num_classes=10, xp=xp)
+            y_batch_one_hot = model.one_hot_labels(y_batch, num_classes=10)
             batch_loss, batch_acc = model.train_batch(x_batch, y_batch_one_hot, learning_rate)
             batch_losses.append(batch_loss)
             batch_accs.append(batch_acc)

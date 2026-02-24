@@ -31,6 +31,8 @@
   - Zeichnung wird als Ziffer (0-9) vorhergesagt und angezeigt.
 - `requirements.txt`
   - Benötigte Python-Pakete für Training und App.
+- `requirements-gpu.txt`
+  - Optionale Pakete für GPU/OpenCL-Betrieb (`pyopencl`).
 
 ## Ziel von `app.py`
 
@@ -46,13 +48,20 @@
 
 ## Rechenbackend (CPU/GPU)
 
-- CPU-Berechnung wird mit `NumPy` ausgeführt.
 - Training und App unterstützen eine Backend-Auswahl: `cpu` oder `gpu`.
-- GPU-Betrieb ist für AMD-GPUs vorgesehen (ROCm-kompatibles CuPy-Setup).
-- Beim Start wird das GPU-Backend aktiv geprüft. Wenn es nicht initialisiert werden kann, wird sauber auf CPU zurückgefallen und ein Hinweis angezeigt.
-- Im GPU-Modus werden Trainings- und Testdaten einmalig ins Backend geladen und dann dort verarbeitet (keine ständigen CPU-GPU-Transfers pro Schritt).
-- Das Lernen bleibt Mini-Batch-basiert (SGD), damit Speicher und Rechenlast stabil bleiben.
-- In den Modell-Metadaten (`models/*.json`) werden `requested_backend`, `active_backend`, `backend_note` und `backend_info` gespeichert.
+- `cpu` bedeutet: komplette Berechnung mit `NumPy`.
+- `gpu` bedeutet: optionales OpenCL-Backend mit `PyOpenCL` (geeignet für AMD-GPUs mit OpenCL-Treiber).
+
+### 100% Regelkonformer Weg
+
+- Für 100% regelkonformen Betrieb: `cpu` (nur `NumPy` als Rechenbackend).
+
+### Optionaler GPU-Weg (Mit pyOpenCL)
+- CPU ist ab o4-pro überfordert und bräuchte Stunden.
+- GPU ist als optionaler Beschleunigungsweg implementiert und klar als Zusatz markiert.
+- Beim Start wird GPU/OpenCL aktiv geprüft. Falls nicht nutzbar, fällt das System sauber auf CPU zurück und meldet den Grund.
+- Im GPU-Modus bleiben die Daten auf dem Device (kein Host-Device-Transfer pro Batch).
+- In den Modell-Metadaten (`models/*.json`) stehen `requested_backend`, `active_backend`, `backend_note` und `backend_info`.
 
 ## Datenquelle
 
