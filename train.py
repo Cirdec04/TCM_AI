@@ -5,6 +5,7 @@ import json
 import re
 import threading
 import tkinter as tk
+import time
 from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
@@ -236,6 +237,7 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
 
     _emit(callback, "start", epochs=epochs)
 
+    start_time = time.perf_counter()
     for epoch in range(1, epochs + 1):
         indices = np.arange(x_train.shape[0])
         rng.shuffle(indices)
@@ -274,6 +276,8 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
             test_acc=test_acc,
         )
 
+    training_time_seconds = time.perf_counter() - start_time
+
     metadata: dict[str, object] = {
         "model_name": model_name,
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -293,13 +297,7 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
             "test_loss": float(history["test_loss"][-1]),
             "test_acc": float(history["test_acc"][-1]),
         },
-        "training_history": {
-            "epochs": [int(i) for i in range(1, epochs + 1)],
-            "train_loss": [float(v) for v in history["train_loss"]],
-            "test_loss": [float(v) for v in history["test_loss"]],
-            "train_acc": [float(v) for v in history["train_acc"]],
-            "test_acc": [float(v) for v in history["test_acc"]],
-        },
+        "training_time_seconds": float(training_time_seconds),
         "artifacts": {
             "model_file": str(model_path),
             "plot_file": str(plot_path),

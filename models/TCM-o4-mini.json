@@ -1,0 +1,30 @@
+{
+  "model_name": "TCM-o4-mini",
+  "created_at": "2026-02-24T14:51:19",
+  "train_data_dir": "C:\\Users\\gesom\\TCM_AI\\data\\training",
+  "test_data_dir": "C:\\Users\\gesom\\TCM_AI\\data\\testing",
+  "size": "mini",
+  "hidden_size": 256,
+  "hidden_layers": 2,
+  "epochs": 96,
+  "batch_size": 128,
+  "learning_rate": 0.0025,
+  "seed": 42,
+  "samples": {
+    "total": 70000,
+    "train": 60000,
+    "test": 10000
+  },
+  "final_metrics": {
+    "train_loss": 0.11891096410975019,
+    "train_acc": 0.966989827647477,
+    "test_loss": 0.13031823933124542,
+    "test_acc": 0.9608
+  },
+  "training_time_seconds": 0.0,
+  "artifacts": {
+    "model_file": "C:\\Users\\gesom\\TCM_AI\\models\\TCM-o4-mini.npz",
+    "plot_file": "C:\\Users\\gesom\\TCM_AI\\models\\TCM-o4-mini_training.png",
+    "metadata_file": "C:\\Users\\gesom\\TCM_AI\\models\\TCM-o4-mini.json"
+  }
+}
