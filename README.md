@@ -44,6 +44,12 @@
 - Trainingsprozess soll nachvollziehbar sein (Forward Pass, Fehlerberechnung, Backpropagation, Gradient Descent).
 - Das Modell soll auf (reduced) MNIST Ziffernklassifikation ausgerichtet sein.
 
+## Rechenbackend (CPU/GPU)
+
+- CPU-Berechnung wird mit `NumPy` ausgeführt wie es auch im Auftrag vorgegeben ist.
+- Training und App unterstuetzen eine Backend-Auswahl: `cpu` oder `gpu`.
+- Wir sind nicht sicher ob es erlaubt ist, aber es ist auf beide arten möglich, GPU ist aber viel schneller, vor allem bei pro modellen
+
 ## Datenquelle
 
 - Reduced MNIST (Kaggle): `https://www.kaggle.com/datasets/mohamedgamal07/reduced-mnist`

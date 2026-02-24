@@ -35,6 +35,7 @@ class DigitApp:
         self.model_name: str | None = None
 
         self.model_var = tk.StringVar()
+        self.device_var = tk.StringVar(value="cpu")
         self.result_var = tk.StringVar(value="Noch keine Idee.")
 
         self._build_ui()
@@ -48,6 +49,12 @@ class DigitApp:
         self.model_combo = ttk.Combobox(top_frame, textvariable=self.model_var, state="readonly", width=30)
         self.model_combo.pack(side="left", padx=8)
         self.model_combo.bind("<<ComboboxSelected>>", self.on_model_changed)
+
+        # UI-Schalter fuer Rechenbackend bei der Inferenz.
+        ttk.Label(top_frame, text="Backend:").pack(side="left", padx=(10, 0))
+        self.device_combo = ttk.Combobox(top_frame, textvariable=self.device_var, state="readonly", values=["cpu", "gpu"], width=8)
+        self.device_combo.pack(side="left", padx=8)
+        self.device_combo.bind("<<ComboboxSelected>>", self.on_device_changed)
 
         ttk.Button(top_frame, text="Refresh", command=self.refresh_model_list).pack(side="left")
 
@@ -118,6 +125,10 @@ class DigitApp:
         self.load_selected_model()
         self.update_prediction(silent=True)
 
+    def on_device_changed(self, _event: tk.Event) -> None:
+        self.load_selected_model()
+        self.update_prediction(silent=True)
+
     def load_selected_model(self) -> None:
         selected = self.model_var.get().strip()
         if not selected:
@@ -127,12 +138,17 @@ class DigitApp:
 
         model_path = self.models_dir / selected
         try:
-            model, metadata = SimpleMLP.load(model_path)
+            requested_backend = self.device_var.get().strip().lower()
+            model, metadata = SimpleMLP.load(model_path, backend=requested_backend)
             self.model = model
             self.model_name = selected
             size_info = metadata.get("size", "unbekannt")
+            backend_info = f"requested={requested_backend}, active={model.backend}"
+            if model.backend_note:
+                backend_info += f" ({model.backend_note})"
             self.result_var.set(
                 f"Modell geladen: {selected} (size: {size_info})\n"
+                f"Backend: {backend_info}\n"
                 f"Ordner: {self.models_dir}"
             )
         except Exception as exc:  # noqa: BLE001
@@ -189,7 +205,8 @@ class DigitApp:
             return
 
         x_input = self.grid.reshape(1, -1).astype(np.float32)
-        probs = self.model.predict_proba(x_input)[0]
+        x_device = self.model.asarray(x_input, dtype=self.model.xp.float32)
+        probs = self.model.to_numpy(self.model.predict_proba(x_device)[0])
         pred = int(np.argmax(probs))
 
         lines = [f"Vorhersage: {pred}", "Wahrscheinlichkeiten pro Zahl:"]

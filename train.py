@@ -64,6 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-ui", action="store_true", help="Kein GUI, direkt im Terminal trainieren.")
     parser.add_argument("--size", choices=["mini", "normal", "pro"], default="normal")
     parser.add_argument("--version", type=str, default=None, help="Versionsnummer des Modells (z. B. 2 oder 2.1).")
+    parser.add_argument("--device", choices=["cpu", "gpu"], default="cpu", help="Rechenbackend: cpu oder gpu.")
     return parser.parse_args()
 
 
@@ -174,7 +175,7 @@ def save_model_json(metadata: dict[str, object], output_path: Path) -> None:
     output_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
-def train_model(size: str, version: str, callback: ProgressCallback | None = None) -> dict[str, object]:
+def train_model(size: str, version: str, device: str = "cpu", callback: ProgressCallback | None = None) -> dict[str, object]:
     if size not in MODEL_PROFILES:
         raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro.")
     version = validate_version(version)
@@ -221,17 +222,29 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
         message=(
             "Training startet mit: "
             f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
-            f"batch_size={batch_size}, learning_rate={learning_rate}, seed={seed}"
+            f"batch_size={batch_size}, learning_rate={learning_rate}, seed={seed}, requested_backend={device}"
         ),
     )
 
+    # Backend wird hier explizit in das Modell injiziert.
     model = SimpleMLP(
         input_size=28 * 28,
         hidden_size=hidden_size,
         hidden_layers=hidden_layers,
         output_size=10,
         seed=seed,
+        backend=device,
     )
+    if model.backend_note:
+        _emit(callback, "info", message=model.backend_note)
+    _emit(callback, "info", message=f"Aktives Backend: {model.backend.upper()}")
+
+    xp = model.xp
+    x_train_device = model.asarray(x_train, dtype=xp.float32)
+    y_train_device = model.asarray(y_train, dtype=xp.int64)
+    x_test_device = model.asarray(x_test, dtype=xp.float32)
+    y_test_device = model.asarray(y_test, dtype=xp.int64)
+
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
     rng = np.random.default_rng(seed)
 
@@ -241,8 +254,13 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
     for epoch in range(1, epochs + 1):
         indices = np.arange(x_train.shape[0])
         rng.shuffle(indices)
-        x_train_shuffled = x_train[indices]
-        y_train_shuffled = y_train[indices]
+        if model.backend == "gpu":
+            indices_device = model.asarray(indices, dtype=xp.int64)
+            x_train_shuffled = x_train_device[indices_device]
+            y_train_shuffled = y_train_device[indices_device]
+        else:
+            x_train_shuffled = x_train_device[indices]
+            y_train_shuffled = y_train_device[indices]
 
         batch_losses: list[float] = []
         batch_accs: list[float] = []
@@ -251,14 +269,14 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
             end = start + batch_size
             x_batch = x_train_shuffled[start:end]
             y_batch = y_train_shuffled[start:end]
-            y_batch_one_hot = one_hot(y_batch, num_classes=10)
+            y_batch_one_hot = one_hot(y_batch, num_classes=10, xp=xp)
             batch_loss, batch_acc = model.train_batch(x_batch, y_batch_one_hot, learning_rate)
             batch_losses.append(batch_loss)
             batch_accs.append(batch_acc)
 
         train_loss = float(np.mean(batch_losses))
         train_acc = float(np.mean(batch_accs))
-        test_loss, test_acc = model.evaluate(x_test, y_test)
+        test_loss, test_acc = model.evaluate(x_test_device, y_test_device)
 
         history["train_loss"].append(train_loss)
         history["train_acc"].append(train_acc)
@@ -290,6 +308,9 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
         "batch_size": batch_size,
         "learning_rate": learning_rate,
         "seed": seed,
+        "requested_backend": device,
+        "active_backend": model.backend,
+        "backend_note": model.backend_note,
         "samples": {"total": int(len(y_train) + len(y_test)), "train": int(len(y_train)), "test": int(len(y_test))},
         "final_metrics": {
             "train_loss": float(history["train_loss"][-1]),
@@ -324,7 +345,7 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
     return metadata
 
 
-def run_cli(size: str, version: str) -> None:
+def run_cli(size: str, version: str, device: str) -> None:
     def callback(event: str, data: dict[str, Any]) -> None:
         if event == "progress":
             print(
@@ -335,7 +356,7 @@ def run_cli(size: str, version: str) -> None:
         elif event == "info":
             print(data["message"])
 
-    metadata = train_model(size=size, version=version, callback=callback)
+    metadata = train_model(size=size, version=version, device=device, callback=callback)
     final_acc = float((metadata.get("final_metrics", {}) or {}).get("test_acc", 0.0))
     print(f"Finale Test-Accuracy: {final_acc:.4f}")
 
@@ -351,6 +372,7 @@ class TrainingUI:
 
         self.size_var = tk.StringVar(value="normal")
         self.version_var = tk.StringVar(value="1")
+        self.device_var = tk.StringVar(value="cpu")
         self.status_var = tk.StringVar(value="Bereit")
 
         self._build_ui()
@@ -369,19 +391,30 @@ class TrainingUI:
         self.version_entry = ttk.Entry(frame, textvariable=self.version_var, width=14)
         self.version_entry.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
 
+        # UI-Schalter fuer Rechenbackend (CPU/GPU).
+        ttk.Label(frame, text="Backend:").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.device_combo = ttk.Combobox(
+            frame,
+            textvariable=self.device_var,
+            state="readonly",
+            values=["cpu", "gpu"],
+            width=12,
+        )
+        self.device_combo.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
+
         self.profile_label = ttk.Label(frame, text="", justify="left")
-        self.profile_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.profile_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
         self.start_btn = ttk.Button(frame, text="Training starten", command=self.start_training)
-        self.start_btn.grid(row=3, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.start_btn.grid(row=4, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
         self.progress = ttk.Progressbar(frame, mode="determinate", length=360)
-        self.progress.grid(row=4, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.progress.grid(row=5, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
-        ttk.Label(frame, textvariable=self.status_var).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Label(frame, textvariable=self.status_var).grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         self.log_text = tk.Text(frame, width=70, height=12, state="disabled")
-        self.log_text.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.log_text.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
     def _refresh_profile_label(self) -> None:
         profile = MODEL_PROFILES[self.size_var.get()]
@@ -417,27 +450,33 @@ class TrainingUI:
             messagebox.showerror("Fehler", "Ungültige Modellgrösse.")
             return
 
+        device = self.device_var.get().strip().lower()
+        if device not in {"cpu", "gpu"}:
+            messagebox.showerror("Fehler", "Ungueltiger Backend-Wert.")
+            return
+
         self.training_running = True
         self.start_btn.config(state="disabled")
         self.size_combo.config(state="disabled")
         self.version_entry.config(state="disabled")
+        self.device_combo.config(state="disabled")
 
         epochs = int(MODEL_PROFILES[size]["epochs"])
         self.progress["maximum"] = epochs
         self.progress["value"] = 0
         self.status_var.set("Training laeuft...")
-        self._append_log(f"Starte Training: size={size}, version={version}")
+        self._append_log(f"Starte Training: size={size}, version={version}, backend={device}")
 
-        thread = threading.Thread(target=self._worker, args=(size, version), daemon=True)
+        thread = threading.Thread(target=self._worker, args=(size, version, device), daemon=True)
         thread.start()
         self.root.after(150, self._poll_events)
 
-    def _worker(self, size: str, version: str) -> None:
+    def _worker(self, size: str, version: str, device: str) -> None:
         def callback(event: str, data: dict[str, Any]) -> None:
             self.event_queue.put((event, data))
 
         try:
-            metadata = train_model(size=size, version=version, callback=callback)
+            metadata = train_model(size=size, version=version, device=device, callback=callback)
             self.event_queue.put(("success", {"metadata": metadata}))
         except Exception as exc:  # noqa: BLE001
             self.event_queue.put(("error", {"message": str(exc)}))
@@ -494,6 +533,7 @@ class TrainingUI:
         self.start_btn.config(state="normal")
         self.size_combo.config(state="readonly")
         self.version_entry.config(state="normal")
+        self.device_combo.config(state="readonly")
 
 
 def run_ui() -> None:
@@ -508,7 +548,7 @@ def main() -> None:
     if args.no_ui:
         if args.version is None:
             raise SystemExit("Im --no-ui Modus ist --version Pflicht.")
-        run_cli(size=args.size, version=args.version)
+        run_cli(size=args.size, version=args.version, device=args.device)
         return
 
     run_ui()
