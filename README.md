@@ -98,3 +98,4 @@ Alle Modelle liegen in `models/` als:
 | Modell        | Daten (Train/Test) | hidden | epochs | batch size | Learning Rate | finale Test-Accuracy |
 |---|---:|---:|---:|---:|---:|---:|
 | `TCM-o4-mini` | 60'000 / 10'000    | 256    | 96     | 128   | 0.0025 | 0.9608          |
+| `TCM-o4`      | 60'000 / 10'000    | 512    | 192    | 128   | 0.0015 | 0.9652          |
