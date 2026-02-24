@@ -40,6 +40,46 @@ __kernel void sum_axis0_f32(
 }
 """
 
+_ADD_BIAS_KERNEL_SRC = """
+__kernel void add_row_bias_f32(
+    __global const float *x,
+    __global const float *bias,
+    __global float *out,
+    const int rows,
+    const int cols)
+{
+    int idx = get_global_id(0);
+    int total = rows * cols;
+    if (idx >= total) {
+        return;
+    }
+    int c = idx % cols;
+    out[idx] = x[idx] + bias[c];
+}
+"""
+
+_MATMUL_KERNEL_SRC = """
+__kernel void matmul_f32(
+    __global const float *a,
+    __global const float *b,
+    __global float *out,
+    const int m,
+    const int k,
+    const int n)
+{
+    int row = get_global_id(0);
+    int col = get_global_id(1);
+    if (row >= m || col >= n) {
+        return;
+    }
+    float acc = 0.0f;
+    for (int i = 0; i < k; ++i) {
+        acc += a[row * k + i] * b[i * n + col];
+    }
+    out[row * n + col] = acc;
+}
+"""
+
 
 def _probe_opencl_gpu() -> tuple[bool, str | None, dict[str, Any]]:
     if cl is None or cl_array is None:
@@ -60,14 +100,30 @@ def _probe_opencl_gpu() -> tuple[bool, str | None, dict[str, Any]]:
         platform, device = gpu_devices[0]
         context = cl.Context(devices=[device])
         queue = cl.CommandQueue(context)
-        program = cl.Program(context, _SUM_AXIS0_KERNEL_SRC).build()
+        program = cl.Program(
+            context,
+            _SUM_AXIS0_KERNEL_SRC + "\n" + _ADD_BIAS_KERNEL_SRC + "\n" + _MATMUL_KERNEL_SRC,
+        ).build()
 
-        # kleiner Funktionstest fuer Dot-Operationen
+        # kleiner Funktionstest fuer MatMul-Kernel
         a = cl_array.to_device(queue, np.array([[1.0, 2.0]], dtype=np.float32))
         b = cl_array.to_device(queue, np.array([[3.0], [4.0]], dtype=np.float32))
-        c = cl_array.dot(a, b)
-        if abs(float(c.get()[0, 0]) - 11.0) > 1e-5:
-            return False, "OpenCL-Dot-Test fehlgeschlagen.", {}
+        out = cl_array.empty(queue, (1, 1), np.float32)
+        program.matmul_f32(
+            queue,
+            (1, 1),
+            None,
+            a.data,
+            b.data,
+            out.data,
+            np.int32(1),
+            np.int32(2),
+            np.int32(1),
+        )
+        c_host = np.asarray(out.get())
+        c_value = float(c_host.reshape(-1)[0])
+        if abs(c_value - 11.0) > 1e-5:
+            return False, "OpenCL-MatMul-Test fehlgeschlagen.", {}
 
         backend_info = {
             "provider": "pyopencl",
@@ -99,7 +155,7 @@ def resolve_compute_backend(requested_backend: str) -> tuple[str, str | None, An
 
     ok, reason, runtime = _probe_opencl_gpu()
     if not ok:
-        return "cpu", f"GPU angefragt, aber OpenCL nicht nutzbar ({reason}). Nutze CPU.", np, None, {
+        return "cpu", f"GPU angefragt, aber OpenCL nicht nutzbar ({reason}).", np, None, {
             "provider": "numpy",
             "runtime": "cpu",
         }
@@ -109,7 +165,7 @@ def resolve_compute_backend(requested_backend: str) -> tuple[str, str | None, An
 
 
 def one_hot(labels: Any, num_classes: int = 10) -> np.ndarray:
-    labels_np = np.asarray(labels, dtype=np.int64)
+    labels_np = np.asarray(labels, dtype=np.int64).reshape(-1)
     encoded = np.zeros((labels_np.shape[0], num_classes), dtype=np.float32)
     encoded[np.arange(labels_np.shape[0]), labels_np] = 1.0
     return encoded
@@ -127,10 +183,19 @@ class SimpleMLP:
     ) -> None:
         self.requested_backend = backend
         self.backend, self.backend_note, self.xp, self._opencl_runtime, self.backend_info = resolve_compute_backend(backend)
+        self.strict_gpu = (backend or "cpu").strip().lower() == "gpu"
+        if self.strict_gpu and self.backend != "gpu":
+            raise RuntimeError(self.backend_note or "GPU angefragt, aber nicht verfuegbar.")
 
         self.queue = self._opencl_runtime["queue"] if self._opencl_runtime is not None else None
         self._sum_axis0_kernel = (
             self._opencl_runtime["program"].sum_axis0_f32 if self._opencl_runtime is not None else None
+        )
+        self._add_bias_kernel = (
+            self._opencl_runtime["program"].add_row_bias_f32 if self._opencl_runtime is not None else None
+        )
+        self._matmul_kernel = (
+            self._opencl_runtime["program"].matmul_f32 if self._opencl_runtime is not None else None
         )
 
         rng = np.random.default_rng(seed)
@@ -153,6 +218,56 @@ class SimpleMLP:
     def _is_opencl_array(self, value: Any) -> bool:
         return cl_array is not None and isinstance(value, cl_array.Array)
 
+    def _ndim(self, value: Any) -> int:
+        shape = getattr(value, "shape", None)
+        if shape is None:
+            return np.asarray(value).ndim
+        return len(shape)
+
+    def _size(self, value: Any) -> int:
+        shape = getattr(value, "shape", None)
+        if shape is None:
+            return int(np.asarray(value).size)
+        size = 1
+        for dim in shape:
+            size *= int(dim)
+        return int(size)
+
+    def _ensure_2d_rowwise(self, value: Any) -> Any:
+        ndim = self._ndim(value)
+        if ndim == 2:
+            return value
+        if self._is_opencl_array(value):
+            if ndim == 1:
+                n = int(value.shape[0])
+                if self.input_size > 0 and n % self.input_size == 0:
+                    return value.reshape((max(1, n // self.input_size), self.input_size))
+                return value.reshape((1, n))
+            return value.reshape((1, 1))
+        value_np = np.asarray(value)
+        if value_np.ndim == 1:
+            if self.input_size > 0 and value_np.size % self.input_size == 0:
+                return value_np.reshape((max(1, value_np.size // self.input_size), self.input_size))
+            return value_np.reshape((1, -1))
+        if value_np.ndim == 0:
+            return value_np.reshape((1, 1))
+        return value_np
+
+    def _ensure_2d_colwise(self, value: Any) -> Any:
+        ndim = self._ndim(value)
+        if ndim == 2:
+            return value
+        if self._is_opencl_array(value):
+            if ndim == 1:
+                return value.reshape((int(value.shape[0]), 1))
+            return value.reshape((1, 1))
+        value_np = np.asarray(value)
+        if value_np.ndim == 1:
+            return value_np.reshape((-1, 1))
+        if value_np.ndim == 0:
+            return value_np.reshape((1, 1))
+        return value_np
+
     def _relu(self, x: Any) -> Any:
         if self._is_opencl_array(x):
             return cl_array.maximum(x, np.float32(0.0))
@@ -164,6 +279,10 @@ class SimpleMLP:
         return (x > 0.0).astype(np.float32)
 
     def _softmax_numpy(self, x_np: np.ndarray) -> np.ndarray:
+        if x_np.ndim == 1:
+            x_np = x_np.reshape((1, -1))
+        elif x_np.ndim == 0:
+            x_np = x_np.reshape((1, 1))
         shifted = x_np - np.max(x_np, axis=1, keepdims=True)
         exp_values = np.exp(shifted)
         return exp_values / np.sum(exp_values, axis=1, keepdims=True)
@@ -181,7 +300,11 @@ class SimpleMLP:
         return np.zeros_like(value)
 
     def _sum_axis0_keepdims(self, value: Any) -> Any:
+        if self._ndim(value) < 2:
+            value = self._ensure_2d_rowwise(value)
         if self._is_opencl_array(value):
+            if int(getattr(value, "offset", 0)) != 0:
+                value = value.copy()
             rows = int(value.shape[0])
             cols = int(value.shape[1])
             out = cl_array.zeros(self.queue, (cols,), np.float32)
@@ -197,24 +320,132 @@ class SimpleMLP:
             return out.reshape((1, cols))
         return np.sum(value, axis=0, keepdims=True)
 
+    def _add_bias(self, matrix: Any, bias: Any) -> Any:
+        if self._ndim(matrix) < 2:
+            matrix = self._ensure_2d_rowwise(matrix)
+        if self._is_opencl_array(matrix) and self._is_opencl_array(bias):
+            if int(getattr(matrix, "offset", 0)) != 0:
+                matrix = matrix.copy()
+            rows = int(matrix.shape[0])
+            cols = int(matrix.shape[1])
+            bias_len = self._size(bias)
+            if bias_len <= 0:
+                raise ValueError("Bias hat ungueltige Groesse.")
+
+            if cols != bias_len:
+                total = rows * cols
+                if total % bias_len != 0:
+                    raise ValueError(
+                        f"Bias-Groesse passt nicht: matrix=({rows},{cols}), bias_len={bias_len}"
+                    )
+                rows = total // bias_len
+                cols = bias_len
+                matrix = matrix.reshape((rows, cols))
+
+            out = cl_array.empty(self.queue, (rows, cols), np.float32)
+            bias_vec = bias.reshape((bias_len,))
+            if int(getattr(bias_vec, "offset", 0)) != 0:
+                bias_vec = bias_vec.copy()
+
+            self._add_bias_kernel(
+                self.queue,
+                (rows * cols,),
+                None,
+                matrix.data,
+                bias_vec.data,
+                out.data,
+                np.int32(rows),
+                np.int32(cols),
+            )
+            return out
+        if self.backend == "gpu":
+            raise RuntimeError("CPU-Fallback fuer Bias-Addition ist deaktiviert (strict GPU mode).")
+        return matrix + bias
+
+    def _is_c_contiguous_opencl_2d(self, value: Any) -> bool:
+        if not self._is_opencl_array(value):
+            return False
+        if self._ndim(value) != 2:
+            return False
+        if int(getattr(value, "offset", 0)) != 0:
+            return False
+        rows = int(value.shape[0])
+        cols = int(value.shape[1])
+        itemsize = int(np.dtype(value.dtype).itemsize)
+        expected = (cols * itemsize, itemsize)
+        # akzeptiere auch leere/degenerate faelle
+        if rows == 0 or cols == 0:
+            return True
+        strides = tuple(int(s) for s in value.strides)
+        return strides == expected
+
+    def _ensure_contiguous_opencl_2d(self, value: Any) -> Any:
+        if not self._is_opencl_array(value):
+            return value
+        if self._ndim(value) != 2:
+            return value.copy() if int(getattr(value, "offset", 0)) != 0 else value
+        if self._is_c_contiguous_opencl_2d(value):
+            return value
+        return value.copy()
+
     def _matmul(self, a: Any, b: Any) -> Any:
         if self._is_opencl_array(a) and self._is_opencl_array(b):
-            return cl_array.dot(a, b)
+            if self._ndim(a) != 2:
+                a = self._ensure_2d_rowwise(a)
+            if self._ndim(b) != 2:
+                b = self._ensure_2d_colwise(b)
+            a = self._ensure_contiguous_opencl_2d(a)
+            b = self._ensure_contiguous_opencl_2d(b)
+
+            m = int(a.shape[0])
+            k = int(a.shape[1])
+            k2 = int(b.shape[0])
+            n = int(b.shape[1])
+            if k != k2:
+                raise ValueError(f"MatMul-Shape mismatch: a=({m},{k}), b=({k2},{n})")
+
+            out = cl_array.empty(self.queue, (m, n), np.float32)
+            try:
+                self._matmul_kernel(
+                    self.queue,
+                    (m, n),
+                    None,
+                    a.data,
+                    b.data,
+                    out.data,
+                    np.int32(m),
+                    np.int32(k),
+                    np.int32(n),
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"OpenCL-MatMul-Kernel fehlgeschlagen (strict GPU mode): {exc}"
+                ) from exc
+            return out
+        if self.backend == "gpu":
+            raise RuntimeError("CPU-Fallback fuer MatMul ist deaktiviert (strict GPU mode).")
+        if np.asarray(a).ndim == 1:
+            a = np.asarray(a).reshape((1, -1))
+        if np.asarray(b).ndim == 1:
+            b = np.asarray(b).reshape((-1, 1))
         return a @ b
 
     def forward(self, x: Any) -> tuple[Any, dict[str, Any]]:
         x = self.asarray(x, dtype=np.float32)
+        x = self._ensure_2d_rowwise(x)
         activations: list[Any] = [x]
         pre_activations: list[Any] = []
 
         a = x
         for layer_idx in range(len(self.weights) - 1):
-            z = self._matmul(a, self.weights[layer_idx]) + self.biases[layer_idx]
+            z_linear = self._matmul(a, self.weights[layer_idx])
+            z = self._add_bias(z_linear, self.biases[layer_idx])
             a = self._relu(z)
             pre_activations.append(z)
             activations.append(a)
 
-        z_out = self._matmul(a, self.weights[-1]) + self.biases[-1]
+        z_out_linear = self._matmul(a, self.weights[-1])
+        z_out = self._add_bias(z_out_linear, self.biases[-1])
         probs = self._softmax(z_out)
         pre_activations.append(z_out)
         activations.append(probs)
@@ -225,6 +456,10 @@ class SimpleMLP:
     def cross_entropy_loss(self, probs: Any, y_one_hot: Any) -> float:
         probs_np = self.to_numpy(probs)
         labels_np = self.to_numpy(y_one_hot)
+        if probs_np.ndim == 1:
+            probs_np = probs_np.reshape((1, -1))
+        if labels_np.ndim == 1:
+            labels_np = labels_np.reshape((1, -1))
         eps = 1e-12
         losses = -np.sum(labels_np * np.log(probs_np + eps), axis=1)
         return float(np.mean(losses))
@@ -232,6 +467,8 @@ class SimpleMLP:
     def train_batch(self, x_batch: Any, y_batch_one_hot: Any, learning_rate: float) -> tuple[float, float]:
         x_batch = self.asarray(x_batch, dtype=np.float32)
         y_batch_one_hot = self.asarray(y_batch_one_hot, dtype=np.float32)
+        x_batch = self._ensure_2d_rowwise(x_batch)
+        y_batch_one_hot = self._ensure_2d_rowwise(y_batch_one_hot)
 
         probs, cache = self.forward(x_batch)
 

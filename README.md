@@ -59,8 +59,7 @@
 ### Optionaler GPU-Weg (Mit pyOpenCL)
 - CPU ist ab o4-pro überfordert und bräuchte Stunden.
 - GPU ist als optionaler Beschleunigungsweg implementiert und klar als Zusatz markiert.
-- Beim Start wird GPU/OpenCL aktiv geprüft. Falls nicht nutzbar, fällt das System sauber auf CPU zurück und meldet den Grund.
-- Im GPU-Modus bleiben die Daten auf dem Device (kein Host-Device-Transfer pro Batch).
+- Beim Start wird GPU/OpenCL aktiv geprüft. Falls nicht nutzbar, bricht der Lauf mit klarer Fehlermeldung ab (strict GPU mode, kein CPU-Fallback).
 - In den Modell-Metadaten (`models/*.json`) stehen `requested_backend`, `active_backend`, `backend_note` und `backend_info`.
 
 ## Datenquelle

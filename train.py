@@ -6,6 +6,7 @@ import re
 import threading
 import tkinter as tk
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
@@ -240,6 +241,9 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
     _emit(callback, "info", message=f"Aktives Backend: {model.backend.upper()}")
     if model.backend_info:
         _emit(callback, "info", message=f"Backend-Details: {model.backend_info}")
+    if model.backend == "gpu":
+        _emit(callback, "info", message="Strict GPU mode aktiv: CPU-Fallbacks sind deaktiviert.")
+        _emit(callback, "info", message="GPU-MatMul: eigener OpenCL-Kernel aktiv (kein cl_array.dot/@ Fallback).")
 
     xp = model.xp
     x_train_backend = model.asarray(x_train, dtype=xp.float32)
@@ -251,6 +255,17 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
             callback,
             "info",
             message="OpenCL-Backend aktiv: Trainingsdaten bleiben auf dem Device (kein Host-Device-Transfer pro Batch).",
+        )
+
+    effective_batch_size = batch_size
+    test_eval_interval = 1
+    if model.backend == "gpu":
+        effective_batch_size = max(batch_size, 2048)
+        test_eval_interval = 10
+        _emit(
+            callback,
+            "info",
+            message=f"GPU-Tuning aktiv: effective_batch_size={effective_batch_size}, test_eval_interval={test_eval_interval}",
         )
 
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
@@ -274,18 +289,41 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
         batch_losses: list[float] = []
         batch_accs: list[float] = []
 
-        for start in range(0, x_train_shuffled.shape[0], batch_size):
-            end = start + batch_size
-            x_batch = x_train_shuffled[start:end]
-            y_batch = y_train_shuffled[start:end]
+        num_samples = int(x_train_shuffled.shape[0])
+        num_batches = (num_samples + effective_batch_size - 1) // effective_batch_size
+        progress_every = max(1, num_batches // 4)
+
+        for batch_idx, start in enumerate(range(0, num_samples, effective_batch_size), start=1):
+            end = start + effective_batch_size
+            if model.backend == "gpu":
+                x_batch = x_train_shuffled[start:end, :]
+                y_batch = y_train_shuffled[start:end]
+            else:
+                x_batch = x_train_shuffled[start:end]
+                y_batch = y_train_shuffled[start:end]
             y_batch_one_hot = model.one_hot_labels(y_batch, num_classes=10)
             batch_loss, batch_acc = model.train_batch(x_batch, y_batch_one_hot, learning_rate)
             batch_losses.append(batch_loss)
             batch_accs.append(batch_acc)
+            if model.backend == "gpu" and (
+                batch_idx == 1
+                or batch_idx % progress_every == 0
+                or batch_idx == num_batches
+            ):
+                _emit(
+                    callback,
+                    "info",
+                    message=f"Epoch {epoch}/{epochs}: Batch {batch_idx}/{num_batches}",
+                )
 
         train_loss = float(np.mean(batch_losses))
         train_acc = float(np.mean(batch_accs))
-        test_loss, test_acc = model.evaluate(x_test_backend, y_test_backend)
+        should_eval_test = (epoch == 1) or (epoch % test_eval_interval == 0) or (epoch == epochs)
+        if should_eval_test:
+            test_loss, test_acc = model.evaluate(x_test_backend, y_test_backend)
+        else:
+            test_loss = float(history["test_loss"][-1]) if history["test_loss"] else 0.0
+            test_acc = float(history["test_acc"][-1]) if history["test_acc"] else 0.0
 
         history["train_loss"].append(train_loss)
         history["train_acc"].append(train_acc)
@@ -315,6 +353,8 @@ def train_model(size: str, version: str, device: str = "cpu", callback: Progress
         "hidden_layers": hidden_layers,
         "epochs": epochs,
         "batch_size": batch_size,
+        "effective_batch_size": effective_batch_size,
+        "test_eval_interval": test_eval_interval,
         "learning_rate": learning_rate,
         "seed": seed,
         "requested_backend": device,
@@ -489,7 +529,8 @@ class TrainingUI:
             metadata = train_model(size=size, version=version, device=device, callback=callback)
             self.event_queue.put(("success", {"metadata": metadata}))
         except Exception as exc:  # noqa: BLE001
-            self.event_queue.put(("error", {"message": str(exc)}))
+            details = traceback.format_exc()
+            self.event_queue.put(("error", {"message": str(exc), "traceback": details}))
 
     def _poll_events(self) -> None:
         keep_polling = self.training_running
@@ -529,6 +570,9 @@ class TrainingUI:
                 keep_polling = False
             elif event == "error":
                 message = str(data.get("message", "Unbekannter Fehler"))
+                trace = str(data.get("traceback", "")).strip()
+                if trace:
+                    self._append_log(trace)
                 self._append_log("Fehler: " + message)
                 self.status_var.set("Fehler")
                 self._finish_training()
