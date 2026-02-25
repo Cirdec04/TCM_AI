@@ -1,5 +1,11 @@
 # TCM-AI-Ziffernerkennung
 
+## Abgabe-Artefakte
+
+- Dokumentation (Word): `docs/TCMAI-Dokumentation.docx`
+- Präsentation (PowerPoint): `docs/TCMAI-Präsentation.pptx`
+- Auswertung (Excel): `docs/tcm_accuracy.xlsx`
+
 ## Projektstruktur
 
 - `data/`
@@ -59,7 +65,7 @@
   - Verwendet in Modellfamilien `TCM-o1` und `TCM-o2`. (10'000 Training / few testing)
 - MNIST PNG (Kaggle): `https://www.kaggle.com/datasets/alexanderyyy/mnist-png`
   - Verwendet in Modellfamilie `TCM-o3` und `TCM-o4` (60'000 Training / 10'000 Testing).
-- EMNIST Digits (via `download_emnist.py`):
+- EMNIST Digits (via `data/download_emnist.py`):
   - Verwendet ab Modellfamilie `TCM-o5`.
   - Enth�lt ca. 240'000 Training-Samples und 40'000 Test-Samples.
   - Bietet deutlich h�here Varianz in den Handschriften, was die Generalisierung verbessert.
