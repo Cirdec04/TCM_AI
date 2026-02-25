@@ -342,6 +342,34 @@ __kernel void sgd_update(
     param[idx] -= learning_rate * grad[idx];
 }
 
+__kernel void adam_update(
+    __global float* param,
+    __global const float* grad,
+    __global float* m,
+    __global float* v,
+    const float lr,
+    const float beta1,
+    const float beta2,
+    const float epsilon,
+    const float b1_t,
+    const float b2_t,
+    const int size
+){
+    const int idx = get_global_id(0);
+    if (idx >= size) return;
+
+    float g = grad[idx];
+    float mt = beta1 * m[idx] + (1.0f - beta1) * g;
+    float vt = beta2 * v[idx] + (1.0f - beta2) * g * g;
+    m[idx] = mt;
+    v[idx] = vt;
+
+    float m_corr = mt / (1.0f - b1_t);
+    float v_corr = vt / (1.0f - b2_t);
+
+    param[idx] -= lr * m_corr / (sqrt(v_corr) + epsilon);
+}
+
 __kernel void gather_features(
     __global const float* full_data,
     __global const int* indices,
@@ -592,6 +620,13 @@ class OpenCLMLPTrainer:
             self.grad_weights.append(cl_array.empty(self.queue, weight_np.shape, dtype=np.float32))
             self.grad_biases.append(cl_array.empty(self.queue, bias_np.shape, dtype=np.float32))
 
+        # Adam State
+        self.m_w: list[cl_array.Array] = [cl_array.zeros_like(w) for w in self.weights]
+        self.v_w: list[cl_array.Array] = [cl_array.zeros_like(w) for w in self.weights]
+        self.m_b: list[cl_array.Array] = [cl_array.zeros_like(b) for b in self.biases]
+        self.v_b: list[cl_array.Array] = [cl_array.zeros_like(b) for b in self.biases]
+        self.t = 0
+
         self.activations: list[cl_array.Array] = []
         for size in self.layer_sizes[:-1]:
             self.activations.append(cl_array.empty(self.queue, (self.batch_size, size), dtype=np.float32))
@@ -745,6 +780,27 @@ class OpenCLMLPTrainer:
             param.data,
             grad.data,
             learning_rate,
+            np.int32(size),
+        )
+
+    def _k_adam_update(self, param: cl_array.Array, grad: cl_array.Array, m: cl_array.Array, v: cl_array.Array, lr: float, t: int) -> None:
+        beta1, beta2, epsilon = 0.9, 0.999, 1e-8
+        size = param.size
+        global_size = (_round_up(size, self.local_1d[0]),)
+        self.program.adam_update(
+            self.queue,
+            global_size,
+            self.local_1d,
+            param.data,
+            grad.data,
+            m.data,
+            v.data,
+            np.float32(lr),
+            np.float32(beta1),
+            np.float32(beta2),
+            np.float32(epsilon),
+            np.float32(beta1**t),
+            np.float32(beta2**t),
             np.int32(size),
         )
 
@@ -908,8 +964,37 @@ class OpenCLMLPTrainer:
         batch_loss = float(np.mean(self.host_loss[:m]))
         batch_acc = float(np.mean(self.host_correct[:m]))
 
-        self._backward_and_update(m, learning_rate=learning_rate)
+        self._backward_and_update_adam(m, learning_rate=learning_rate)
         return batch_loss, batch_acc
+
+    def _backward_and_update_adam(self, m: int, learning_rate: float) -> None:
+        self.t += 1
+        last = self.num_layers - 1
+
+        # Gradients
+        pre_output_activation = self.activations[self.hidden_layers]
+        pre_output_size = self.layer_sizes[-2]
+        self._k_matmul_at_b(pre_output_activation, self.dz_output, self.grad_weights[last], m=m, k=pre_output_size, n=self.output_size)
+        self._k_reduce_sum_rows(self.dz_output, self.grad_biases[last], m=m, n=self.output_size)
+
+        if self.hidden_layers > 0 and self.backprop_a is not None and self.backprop_b is not None:
+            self._k_matmul_a_bt(self.dz_output, self.weights[last], self.backprop_a, m=m, n=self.output_size, k=self.hidden_size)
+            da_current, da_next = self.backprop_a, self.backprop_b
+            for hidden_idx in range(self.hidden_layers - 1, -1, -1):
+                hidden_width = self.layer_sizes[hidden_idx + 1]
+                self._k_relu_backprop_inplace(da_current, self.activations[hidden_idx + 1], size=m * hidden_width)
+                prev_width = self.layer_sizes[hidden_idx]
+                self._k_matmul_at_b(self.activations[hidden_idx], da_current, self.grad_weights[hidden_idx], m=m, k=prev_width, n=hidden_width)
+                self._k_reduce_sum_rows(da_current, self.grad_biases[hidden_idx], m=m, n=hidden_width)
+                if hidden_idx > 0:
+                    prev_hidden_width = self.layer_sizes[hidden_idx]
+                    self._k_matmul_a_bt(da_current, self.weights[hidden_idx], da_next, m=m, n=hidden_width, k=prev_hidden_width)
+                    da_current, da_next = da_next, da_current
+
+        # Adam Update (statt SGD)
+        for i in range(self.num_layers):
+            self._k_adam_update(self.weights[i], self.grad_weights[i], self.m_w[i], self.v_w[i], learning_rate, self.t)
+            self._k_adam_update(self.biases[i], self.grad_biases[i], self.m_b[i], self.v_b[i], learning_rate, self.t)
 
     def train_batch(self, x_batch: np.ndarray, y_batch: np.ndarray, learning_rate: float) -> tuple[float, float]:
         m = int(x_batch.shape[0])
@@ -927,7 +1012,7 @@ class OpenCLMLPTrainer:
         batch_loss = float(np.mean(self.host_loss[:m]))
         batch_acc = float(np.mean(self.host_correct[:m]))
 
-        self._backward_and_update(m, learning_rate=learning_rate)
+        self._backward_and_update_adam(m, learning_rate=learning_rate)
         return batch_loss, batch_acc
 
     def evaluate(self, x_eval: np.ndarray, y_eval: np.ndarray) -> tuple[float, float]:

@@ -58,6 +58,13 @@ class SimpleMLP:
             self.weights.append(self.asarray(weight_np, dtype=np.float32))
             self.biases.append(self.asarray(bias_np, dtype=np.float32))
 
+        # Adam Optimizer State (Mittelwerte und Varianzen)
+        self.m_w = [np.zeros_like(w) for w in self.weights]
+        self.v_w = [np.zeros_like(w) for w in self.weights]
+        self.m_b = [np.zeros_like(b) for b in self.biases]
+        self.v_b = [np.zeros_like(b) for b in self.biases]
+        self.t = 0  # Zeitschritt
+
     def _ensure_2d_rowwise(self, value: Any) -> np.ndarray:
         value_np = np.asarray(value)
         if value_np.ndim == 2:
@@ -146,9 +153,30 @@ class SimpleMLP:
             grads_w[layer_idx] = activations[layer_idx].T @ dz
             grads_b[layer_idx] = np.sum(dz, axis=0, keepdims=True)
 
+        # Adam Hyperparameter
+        beta1 = 0.9
+        beta2 = 0.999
+        epsilon = 1e-8
+        self.t += 1
+
         for layer_idx in range(len(self.weights)):
-            self.weights[layer_idx] = self.weights[layer_idx] - learning_rate * grads_w[layer_idx]
-            self.biases[layer_idx] = self.biases[layer_idx] - learning_rate * grads_b[layer_idx]
+            # Adam Update fuer Gewichte
+            self.m_w[layer_idx] = beta1 * self.m_w[layer_idx] + (1 - beta1) * grads_w[layer_idx]
+            self.v_w[layer_idx] = beta2 * self.v_w[layer_idx] + (1 - beta2) * (grads_w[layer_idx] ** 2)
+            
+            m_w_corr = self.m_w[layer_idx] / (1 - beta1**self.t)
+            v_w_corr = self.v_w[layer_idx] / (1 - beta2**self.t)
+            
+            self.weights[layer_idx] -= learning_rate * m_w_corr / (np.sqrt(v_w_corr) + epsilon)
+
+            # Adam Update fuer Biases
+            self.m_b[layer_idx] = beta1 * self.m_b[layer_idx] + (1 - beta1) * grads_b[layer_idx]
+            self.v_b[layer_idx] = beta2 * self.v_b[layer_idx] + (1 - beta2) * (grads_b[layer_idx] ** 2)
+            
+            m_b_corr = self.m_b[layer_idx] / (1 - beta1**self.t)
+            v_b_corr = self.v_b[layer_idx] / (1 - beta2**self.t)
+            
+            self.biases[layer_idx] -= learning_rate * m_b_corr / (np.sqrt(v_b_corr) + epsilon)
 
         loss = self.cross_entropy_loss(probs, y_batch_one_hot)
         probs_np = self.to_numpy(probs)

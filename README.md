@@ -13,7 +13,7 @@
     - `<size-tag>` ist optional:
       - kein Tag = `normal`
       - `-mini` = kleines/schnelles Modell
-      - `-pro` = gröesseres/langsames Modell
+      - `-pro` = grösseres/langsames Modell
     - Beispiele:
       - `TCM-o1` (normal)
       - `TCM-o2-mini`
@@ -24,9 +24,9 @@
   - Speichert das trainierte Modell nach `models/`.
   - Konfigurierbar (Modellgrössen: mini/normal/pro).
 - `train-gpu.py`
-  - Eigenständiges GPU-Training per `pyopencl` (ohne UI).
+  - Eigenständiges GPU-Training per `pyopencl`.
   - Erstellt kompatible Artefakte (`.npz`, `.json`, `_training.png`) im gleichen Format wie `train.py`.
-  - Bevorzugt automatisch GPU-Geraete (inkl. AMD) und kann Plattform/Gerät explizit waehlen.
+  - Bevorzugt automatisch GPU-Geräte und kann Plattform/Gerät explizit wählen.
 - `nn.py`
   - Enthält den gemeinsamen NN-Code (Netzwerk, Vorhersage, Laden/Speichern).
 - `app.py`
@@ -51,78 +51,27 @@
 ## Rechenbackend
 
 - `app.py` und `train.py` laufen CPU-only mit `NumPy`.
-- Fuer beschleunigtes Training gibt es zusaetzlich `train-gpu.py` mit OpenCL (`pyopencl`).
-
-## GPU-Training mit `train-gpu.py` (OpenCL, inkl. AMD)
-
-### 1) Voraussetzungen
-
-- Python-Umgebung wie bisher (siehe `requirements.txt`).
-- Zusaetzlich: `pyopencl`
-  - Installation: `pip install pyopencl`
-- Funktionierende OpenCL-Treiber/Laufzeit:
-  - AMD unter Windows: aktueller Adrenalin-Treiber (enthaelt OpenCL Runtime).
-  - AMD unter Linux: OpenCL-faehige ROCm/AMDGPU-Installation inkl. ICD.
-
-### 2) OpenCL-Geraete pruefen
-
-```bash
-python train-gpu.py --list-devices
-```
-
-Das zeigt Plattform- und Geraete-Indizes im Format `[platform:device]`.
-
-### 3) Training starten
-
-Automatische Geraetewahl (GPU bevorzugt, AMD priorisiert wenn verfuegbar):
-
-```bash
-python train-gpu.py --size normal --version 4.1
-```
-
-Explizite Geraetewahl (z. B. AMD-Karte):
-
-```bash
-python train-gpu.py --platform-index 0 --device-index 0 --size pro --version 4.2
-```
-
-Optional fuer mehr Durchsatz:
-
-```bash
-python train-gpu.py --size pro --version 4.3 --batch-size-override 512
-```
-
-Nuetzliche Optionen:
-
-- `--batch-size-override N`: groessere Batchgroesse fuer mehr GPU-Auslastung.
-- `--test-eval-interval N`: Test-Set nur alle N Epochen (reduziert Overhead).
-- `--no-fast-math`: deaktiviert aggressive OpenCL-Math-Optimierungen.
-
-### 4) Output/Kompatibilitaet
-
-`train-gpu.py` schreibt wie `train.py` nach `models/`:
-
-- `<name>.npz` (Gewichte)
-- `<name>.json` (Metadaten, inkl. OpenCL-Backend-Infos)
-- `<name>_training.png` (Trainingskurve)
-
-Die Artefakte sind mit der bestehenden `app.py` kompatibel.
-
-### 5) Performance-Hinweise
-
-- Der groesste Speedup kommt auf echten GPUs mit gutem OpenCL-Treiber.
-- Fuer `normal`/`pro` sind groessere Batches meist schneller als CPU.
-- Falls es nicht deutlich schneller ist:
-  - richtige GPU explizit waehlen (`--platform-index`, `--device-index`)
-  - Batchgroesse erhoehen (`--batch-size-override`)
-  - Hintergrundlast auf der GPU reduzieren.
+- Für beschleunigtes Training auf einer GPU gibt es zusätzlich `train-gpu.py` mit OpenCL (`pyopencl`). (Ab o4-pro wäre die CPU in einem Desktopcomputer sehr langsam. per GPU geht es bedeutend schneller)
 
 ## Datenquelle
 
 - Reduced MNIST (Kaggle): `https://www.kaggle.com/datasets/mohamedgamal07/reduced-mnist`
   - Verwendet in Modellfamilien `TCM-o1` und `TCM-o2`. (10'000 Training / few testing)
 - MNIST PNG (Kaggle): `https://www.kaggle.com/datasets/alexanderyyy/mnist-png`
-  - Verwendet in Modellfamilie `TCM-o3` und later (60'000 Training / 10'000 Testing).
+  - Verwendet in Modellfamilie `TCM-o3` und `TCM-o4` (60'000 Training / 10'000 Testing).
+- EMNIST Digits (via `download_emnist.py`):
+  - Verwendet ab Modellfamilie `TCM-o5`.
+  - Enthält ca. 240'000 Training-Samples und 40'000 Test-Samples.
+  - Bietet deutlich höhere Varianz in den Handschriften, was die Generalisierung verbessert.
+  - Wird in zusammenspiel mit MNIST-Full verwendet für ein Trainings-Set mit 300'000 Samples.
+
+  #### Adam-Optimizer
+Ab Version 0.5 nutzen wir den **Adam-Optimizer** (Adaptive Moment Estimation). Im Vergleich zum Standard-SGD bietet er:
+1. **Momentum**: Er merkt sich die Richtung der letzten Updates und ueberwindet so "lokale Minima" (Sackgassen) flüssiger.
+2. **Adaptive Lernrate**: Er passt die Lernrate fuer jedes Gewicht individuell an.
+3. **Konvergenz**: Das Modell erreicht viel schneller (in deutlich weniger Epochen) eine hohe Genauigkeit.
+
+###
 
 ## Modelle
 
@@ -173,3 +122,10 @@ Alle Modelle liegen in `models/` als:
 |---|---:|---:|---:|---:|---:|---:|
 | `TCM-o4-mini` | 60'000 / 10'000    | 256    | 96     | 128   | 0.0025 | 0.9608 |
 | `TCM-o4`      | 60'000 / 10'000    | 512    | 192    | 128   | 0.0015 | 0.9652          |
+
+### Familie `TCM-o5` (Mega Dataset & Adam Optimizer)
+
+- Daten: Kombiniertes Set aus MNIST Full + EMNIST Digits (~300'000 Train / 50'000 Test).
+- Änderung ggü. `TCM-o4`: 
+  - **Adam Optimizer**: Wechsel vom einfachen SGD auf den Adam-Optimizer.
+  - **Live-Graphen während dem trainieren**: Echtzeit-Visualisierung von Loss und Accuracy während dem trainieren.
