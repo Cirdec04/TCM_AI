@@ -65,10 +65,11 @@
   - Bietet deutlich höhere Varianz in den Handschriften, was die Generalisierung verbessert.
   - Wird in zusammenspiel mit MNIST-Full verwendet für ein Trainings-Set mit 300'000 Samples.
 
-  #### Adam-Optimizer
+## Adam-Optimizer
+
 Ab Version 0.5 nutzen wir den **Adam-Optimizer** (Adaptive Moment Estimation). Im Vergleich zum Standard-SGD bietet er:
-1. **Momentum**: Er merkt sich die Richtung der letzten Updates und ueberwindet so "lokale Minima" (Sackgassen) flüssiger.
-2. **Adaptive Lernrate**: Er passt die Lernrate fuer jedes Gewicht individuell an.
+1. **Momentum**: Er merkt sich die Richtung der letzten Updates und überwindet so "lokale Minima" (Sackgassen) flüssiger.
+2. **Adaptive Lernrate**: Er passt die Lernrate für jedes Gewicht individuell an.
 3. **Konvergenz**: Das Modell erreicht viel schneller (in deutlich weniger Epochen) eine hohe Genauigkeit.
 
 ###
