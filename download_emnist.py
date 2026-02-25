@@ -52,8 +52,8 @@ def save_emnist_to_folders():
             # Konvertiere numpy Array zu PIL Image
             img = Image.fromarray(img_array.astype('uint8'), mode='L')
             
-            # Dateiname: emnist_{index}.png
-            img.save(output_dir / split_name / str(label) / f"emnist_{idx}.png")
+            # Dateiname: emnist_sample_{index}.png (verhindert Überschreiben von MNIST-Dateien)
+            img.save(output_dir / split_name / str(label) / f"emnist_sample_{idx}.png")
 
     print("\nFertig! Alle Bilder wurden in /data/emnist gespeichert.")
     print("EMNIST ist bereits 'MNIST-kompatibel' gedreht und gespiegelt worden.")
