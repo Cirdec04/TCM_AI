@@ -44,16 +44,21 @@ def parse_idx(fd):
 def save_emnist_to_folders():
     base_dir = Path(__file__).resolve().parent
     temp_dir = base_dir / "temp_emnist"
-    output_dir = base_dir / "data" / "emnist"
+    output_dir = base_dir / "data" / "EMNIST"  # Grossbuchstaben wie der vorhandene Ordner
     zip_path = base_dir / "emnist.zip"
 
     temp_dir.mkdir(exist_ok=True)
-    
-    # 1. Download
+
+    # 1. Download (beschädigte ZIP vorab prüfen und ggf. löschen)
+    if zip_path.exists():
+        if zip_path.stat().st_size < 100_000_000:  # kleiner als 100 MB = kaputt
+            print(f"[1/5] Beschädigte emnist.zip gefunden ({zip_path.stat().st_size // 1024} KB). Lösche und lade neu herunter...")
+            zip_path.unlink()
+        else:
+            print(f"[1/5] emnist.zip gefunden ({zip_path.stat().st_size // (1024*1024)} MB). Überspringe Download.")
+
     if not zip_path.exists():
         download_file_from_google_drive('1R0blrtCsGEVLjVL3eijHMxrwahRUDK26', str(zip_path))
-    else:
-        print("[1/5] emnist.zip existiert bereits. Überspringe Download.")
     
     # 2. Entpacken
     print(f"[3/5] Entpacke emnist.zip nach {temp_dir}...")
