@@ -427,6 +427,12 @@ def parse_args() -> argparse.Namespace:
         help="Ueberschreibt die Batch-Size aus dem Profil (groesser = oft schneller auf GPU).",
     )
     parser.add_argument("--test-eval-interval", type=int, default=1, help="Test-Auswertung alle N Epochen.")
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=15,
+        help="Stoppt, wenn sich die Test-Accuracy so viele Epochen nicht verbessert (0 = aus).",
+    )
     parser.add_argument("--no-fast-math", action="store_true", help="Deaktiviert OpenCL fast math Build-Optionen.")
     parser.add_argument("--no-ui", action="store_true", help="Kein GUI, direkt im Terminal trainieren.")
     return parser.parse_args()
@@ -1165,6 +1171,7 @@ def train_model_gpu(
     batch_size_override: int | None,
     test_eval_interval: int,
     fast_math: bool,
+    early_stopping_patience: int = 15,
     callback: ProgressCallback | None = None,
 ) -> dict[str, object]:
     if size not in MODEL_PROFILES:
@@ -1172,6 +1179,8 @@ def train_model_gpu(
     version = validate_version(version)
     if test_eval_interval <= 0:
         raise ValueError("--test-eval-interval muss >= 1 sein.")
+    if early_stopping_patience < 0:
+        raise ValueError("--early-stopping-patience muss >= 0 sein.")
 
     profile = MODEL_PROFILES[size]
     hidden_size = int(profile["hidden_size"])
@@ -1236,7 +1245,8 @@ def train_model_gpu(
             "Training startet mit: "
             f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
             f"batch_size={base_batch_size}, effective_batch_size={effective_batch_size}, "
-            f"learning_rate={learning_rate}, seed={seed}, fast_math={fast_math}"
+            f"learning_rate={learning_rate}, seed={seed}, fast_math={fast_math}, "
+            f"early_stopping_patience={early_stopping_patience}"
         ),
     )
 
@@ -1244,6 +1254,11 @@ def train_model_gpu(
 
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
     rng = np.random.default_rng(seed)
+    early_stopping_enabled = early_stopping_patience > 0
+    best_test_acc = float("-inf")
+    best_test_epoch = 0
+    epochs_without_improvement = 0
+    stopped_early = False
     start_time = time.perf_counter()
 
     train_count = int(x_train.shape[0])
@@ -1309,7 +1324,38 @@ def train_model_gpu(
             test_acc=test_acc,
         )
 
+        if should_eval_test and early_stopping_enabled:
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+                best_test_epoch = epoch
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+
+            if epochs_without_improvement >= early_stopping_patience:
+                stopped_early = True
+                _emit(
+                    callback,
+                    "info",
+                    message=(
+                        f"Early Stopping: keine Verbesserung der Test-Accuracy in "
+                        f"{early_stopping_patience} Epochen. Stoppe bei Epoch {epoch}."
+                    ),
+                )
+                break
+
     training_time_seconds = float(time.perf_counter() - start_time)
+    epochs_trained = len(history["train_loss"])
+
+    if history["test_acc"]:
+        if best_test_epoch <= 0:
+            best_idx = int(np.argmax(np.asarray(history["test_acc"], dtype=np.float32)))
+            best_test_epoch = best_idx + 1
+            best_test_acc = float(history["test_acc"][best_idx])
+    else:
+        best_test_acc = 0.0
+        best_test_epoch = 0
+
     weights, biases = trainer.export_weights()
 
     metadata: dict[str, object] = {
@@ -1321,11 +1367,19 @@ def train_model_gpu(
         "hidden_size": hidden_size,
         "hidden_layers": hidden_layers,
         "epochs": epochs,
+        "epochs_trained": epochs_trained,
         "batch_size": base_batch_size,
         "effective_batch_size": effective_batch_size,
         "test_eval_interval": test_eval_interval,
         "learning_rate": learning_rate,
         "seed": seed,
+        "early_stopping": {
+            "enabled": early_stopping_enabled,
+            "patience": int(early_stopping_patience),
+            "stopped_early": stopped_early,
+            "best_test_acc": float(best_test_acc),
+            "best_test_epoch": int(best_test_epoch),
+        },
         "compute_backend": "opencl",
         "backend_info": {
             "platform_index": selected_device.platform_index,
@@ -1389,6 +1443,7 @@ def run_cli(args: argparse.Namespace) -> None:
         batch_size_override=args.batch_size_override,
         test_eval_interval=args.test_eval_interval,
         fast_math=not args.no_fast_math,
+        early_stopping_patience=args.early_stopping_patience,
         callback=callback,
     )
     final_acc = float((metadata.get("final_metrics", {}) or {}).get("test_acc", 0.0))
@@ -1530,6 +1585,7 @@ class TrainingUI:
                 batch_size_override=None,
                 test_eval_interval=1,
                 fast_math=True,
+                early_stopping_patience=15,
                 callback=callback,
             )
             self.event_queue.put(("success", {"metadata": metadata}))
