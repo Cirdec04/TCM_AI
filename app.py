@@ -33,9 +33,12 @@ class DigitApp:
         self.pixel_ids: list[list[int]] = []
         self.model: SimpleMLP | None = None
         self.model_name: str | None = None
+        self.loaded_models: dict[str, SimpleMLP] = {}
 
         self.model_var = tk.StringVar()
+        self.test_all_var = tk.BooleanVar(value=False)
         self.result_var = tk.StringVar(value="Noch keine Idee.")
+        self.all_models_var = tk.StringVar(value="Test all ist aus.")
 
         self._build_ui()
         self.refresh_model_list()
@@ -50,9 +53,18 @@ class DigitApp:
         self.model_combo.bind("<<ComboboxSelected>>", self.on_model_changed)
 
         ttk.Button(top_frame, text="Refresh", command=self.refresh_model_list).pack(side="left")
+        ttk.Checkbutton(
+            top_frame,
+            text="Test all",
+            variable=self.test_all_var,
+            command=self.on_toggle_test_all,
+        ).pack(side="left", padx=(10, 0))
 
-        canvas_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
-        canvas_frame.pack()
+        content_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
+        content_frame.pack()
+
+        canvas_frame = ttk.Frame(content_frame)
+        canvas_frame.grid(row=0, column=0, sticky="n")
 
         self.canvas = tk.Canvas(canvas_frame, width=self.canvas_size, height=self.canvas_size, bg="black", highlightthickness=1)
         self.canvas.pack()
@@ -65,6 +77,10 @@ class DigitApp:
             canvas_frame,
             text=f"Zoom x{self.display_scale} (28x28 Raster) | Linksklick: weicher Brush | Rechtsklick: radieren",
         ).pack(pady=(6, 0))
+
+        side_frame = ttk.LabelFrame(content_frame, text="Alle Modelle", padding=8)
+        side_frame.grid(row=0, column=1, sticky="nw", padx=(12, 0))
+        ttk.Label(side_frame, textvariable=self.all_models_var, justify="left", width=36).pack(anchor="nw")
 
         buttons = ttk.Frame(self.root, padding=(10, 0, 10, 10))
         buttons.pack(fill="x")
@@ -106,17 +122,34 @@ class DigitApp:
             self.model_var.set("")
             self.model = None
             self.model_name = None
+            self.loaded_models.clear()
             self.result_var.set("Keine Modelle gefunden")
+            self.all_models_var.set("Keine Modelle gefunden.")
             return
+
+        self.loaded_models = {name: model for name, model in self.loaded_models.items() if name in model_files}
 
         if self.model_var.get() not in model_files:
             self.model_var.set(model_files[-1])
 
         self.load_selected_model()
+        self.update_prediction(silent=True)
 
     def on_model_changed(self, _event: tk.Event) -> None:
         self.load_selected_model()
         self.update_prediction(silent=True)
+
+    def on_toggle_test_all(self) -> None:
+        self.update_prediction(silent=True)
+
+    def _get_or_load_model(self, model_name: str) -> SimpleMLP:
+        if model_name in self.loaded_models:
+            return self.loaded_models[model_name]
+
+        model_path = self.models_dir / model_name
+        model, _metadata = SimpleMLP.load(model_path, backend="cpu")
+        self.loaded_models[model_name] = model
+        return model
 
     def load_selected_model(self) -> None:
         selected = self.model_var.get().strip()
@@ -125,14 +158,12 @@ class DigitApp:
             self.model_name = None
             return
 
-        model_path = self.models_dir / selected
         try:
-            model, metadata = SimpleMLP.load(model_path, backend="cpu")
+            model = self._get_or_load_model(selected)
             self.model = model
             self.model_name = selected
-            size_info = metadata.get("size", "unbekannt")
             self.result_var.set(
-                f"Modell geladen: {selected} (size: {size_info})\n"
+                f"Modell geladen: {selected}\n"
                 f"Backend: cpu\n"
                 f"Ordner: {self.models_dir}"
             )
@@ -177,6 +208,26 @@ class DigitApp:
         self.grid.fill(0.0)
         self.canvas.itemconfig("pixel", fill="black")
         self.result_var.set("Zeichnung geloescht. Zeichne eine Ziffer.")
+        self.all_models_var.set("Zeichnung leer.")
+
+    def _update_all_models_predictions(self, x_input: np.ndarray) -> None:
+        model_files = list(self.model_combo["values"])
+        if not model_files:
+            self.all_models_var.set("Keine Modelle gefunden.")
+            return
+
+        lines = []
+        for model_name in model_files:
+            try:
+                model = self._get_or_load_model(model_name)
+                x_device = model.asarray(x_input, dtype=model.xp.float32)
+                probs = model.to_numpy(model.predict_proba(x_device)[0])
+                pred = int(np.argmax(probs))
+                lines.append(f"{model_name}: {pred}")
+            except Exception as exc:  # noqa: BLE001
+                lines.append(f"{model_name}: Fehler ({exc})")
+
+        self.all_models_var.set("\n".join(lines))
 
     def update_prediction(self, silent: bool = True) -> None:
         if self.model is None or self.model_name != self.model_var.get().strip():
@@ -187,9 +238,15 @@ class DigitApp:
             return
         if float(np.sum(self.grid)) == 0.0:
             self.result_var.set("Zeichnung leer. Zeichne eine Ziffer.")
+            self.all_models_var.set("Zeichnung leer.")
             return
 
         x_input = self.grid.reshape(1, -1).astype(np.float32)
+        if self.test_all_var.get():
+            self.result_var.set("Test all ist aktiv.\nEinzelmetriken vom ausgewaehlten Modell sind ausgeblendet.")
+            self._update_all_models_predictions(x_input)
+            return
+
         x_device = self.model.asarray(x_input, dtype=self.model.xp.float32)
         probs = self.model.to_numpy(self.model.predict_proba(x_device)[0])
         pred = int(np.argmax(probs))
@@ -198,6 +255,7 @@ class DigitApp:
         for idx in range(10):
             lines.append(f"  {idx}: {probs[idx] * 100:.2f}%")
         self.result_var.set("\n".join(lines))
+        self.all_models_var.set("Test all ist aus.")
 
 
 def main() -> None:

@@ -54,7 +54,11 @@ MODEL_PROFILES = {
         "batch_size": 512,
     },
 }
-ADAM_LEARNING_RATE = 0.0015
+DEFAULT_ADAM_LEARNING_RATES = {
+    "mini": 0.0015,
+    "normal": 0.0015,
+    "pro": 0.0008,
+}
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
@@ -69,6 +73,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=15,
         help="Stoppt, wenn sich die Test-Accuracy so viele Epochen nicht verbessert (0 = aus).",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=None,
+        help="Adam Learning Rate (Standard: mini/normal=0.0015, pro=0.0008).",
     )
     return parser.parse_args()
 
@@ -200,12 +210,15 @@ def train_model(
     version: str,
     callback: ProgressCallback | None = None,
     early_stopping_patience: int = 15,
+    learning_rate_override: float | None = None,
 ) -> dict[str, object]:
     if size not in MODEL_PROFILES:
         raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro.")
     version = validate_version(version)
     if early_stopping_patience < 0:
         raise ValueError("--early-stopping-patience muss >= 0 sein.")
+    if learning_rate_override is not None and learning_rate_override <= 0:
+        raise ValueError("--learning-rate muss > 0 sein.")
 
     train_data_dir = TRAIN_DATA_DIR
     test_data_dir = TEST_DATA_DIR
@@ -220,7 +233,7 @@ def train_model(
     hidden_layers = int(profile["hidden_layers"])
     epochs = int(profile["epochs"])
     batch_size = int(profile["batch_size"])
-    learning_rate = ADAM_LEARNING_RATE
+    learning_rate = float(learning_rate_override) if learning_rate_override is not None else float(DEFAULT_ADAM_LEARNING_RATES[size])
     seed = get_fixed_seed()
 
     model_name = build_model_name(version=version, size=size)
@@ -246,7 +259,7 @@ def train_model(
         message=(
             "Training startet mit: "
             f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
-            f"batch_size={batch_size}, optimizer=adam, seed={seed}, "
+            f"batch_size={batch_size}, optimizer=adam, learning_rate={learning_rate}, seed={seed}, "
             f"early_stopping_patience={early_stopping_patience}"
         ),
     )
@@ -381,6 +394,7 @@ def train_model(
         "effective_batch_size": effective_batch_size,
         "test_eval_interval": test_eval_interval,
         "optimizer": "adam",
+        "learning_rate": float(learning_rate),
         "parameters": {
             "total": int(parameter_total),
             "human": format_parameter_count(parameter_total),
@@ -427,7 +441,7 @@ def train_model(
     return metadata
 
 
-def run_cli(size: str, version: str, early_stopping_patience: int) -> None:
+def run_cli(size: str, version: str, early_stopping_patience: int, learning_rate: float | None) -> None:
     def callback(event: str, data: dict[str, Any]) -> None:
         if event == "progress":
             print(
@@ -443,6 +457,7 @@ def run_cli(size: str, version: str, early_stopping_patience: int) -> None:
         version=version,
         callback=callback,
         early_stopping_patience=early_stopping_patience,
+        learning_rate_override=learning_rate,
     )
     final_acc = float((metadata.get("final_metrics", {}) or {}).get("test_acc", 0.0))
     print(f"Finale Test-Accuracy: {final_acc:.4f}")
@@ -459,6 +474,7 @@ class TrainingUI:
 
         self.size_var = tk.StringVar(value="normal")
         self.version_var = tk.StringVar(value="1")
+        self.learning_rate_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Bereit")
 
         # Live-Plot Daten
@@ -480,17 +496,21 @@ class TrainingUI:
         self.version_entry = ttk.Entry(frame, textvariable=self.version_var, width=14)
         self.version_entry.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
 
+        ttk.Label(frame, text="Learning Rate:").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.learning_rate_entry = ttk.Entry(frame, textvariable=self.learning_rate_var, width=14)
+        self.learning_rate_entry.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
+
         self.profile_label = ttk.Label(frame, text="", justify="left")
-        self.profile_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.profile_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
         self.start_btn = ttk.Button(frame, text="Training starten", command=self.start_training)
-        self.start_btn.grid(row=3, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.start_btn.grid(row=4, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
         self.progress = ttk.Progressbar(frame, mode="determinate", length=360)
-        self.progress.grid(row=4, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.progress.grid(row=5, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
         self.log_text = tk.Text(frame, width=70, height=8, state="disabled")
-        self.log_text.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.log_text.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
         # Live Plot Bereich
         self.fig = mpl_fig.Figure(figsize=(7, 3), dpi=100)
@@ -502,7 +522,7 @@ class TrainingUI:
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=frame)
         self.canvas_widget = self.canvas.get_tk_widget()
-        self.canvas_widget.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.canvas_widget.grid(row=8, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
     def _setup_axes(self) -> None:
         self.ax_loss.clear()
@@ -516,14 +536,17 @@ class TrainingUI:
         self.ax_acc.set_ylim(0, 1.0)
 
     def _refresh_profile_label(self) -> None:
-        profile = MODEL_PROFILES[self.size_var.get()]
+        size = self.size_var.get()
+        profile = MODEL_PROFILES[size]
+        default_lr = float(DEFAULT_ADAM_LEARNING_RATES[size])
+        self.learning_rate_var.set(f"{default_lr:.4f}")
         self.profile_label.config(
             text=(
                 f"Profile: hidden={int(profile['hidden_size'])}, "
                 f"layers={int(profile['hidden_layers'])}, "
                 f"epochs={int(profile['epochs'])}, "
                 f"batch={int(profile['batch_size'])}, "
-                "optimizer=adam"
+                f"optimizer=adam, default_lr={default_lr:.4f}"
             )
         )
 
@@ -548,17 +571,27 @@ class TrainingUI:
         if size not in MODEL_PROFILES:
             messagebox.showerror("Fehler", "Ungueltige Modellgroesse.")
             return
+        learning_rate_raw = self.learning_rate_var.get().strip()
+        try:
+            learning_rate = float(learning_rate_raw)
+        except ValueError:
+            messagebox.showerror("Fehler", "Learning Rate muss eine Zahl sein.")
+            return
+        if learning_rate <= 0:
+            messagebox.showerror("Fehler", "Learning Rate muss > 0 sein.")
+            return
 
         self.training_running = True
         self.start_btn.config(state="disabled")
         self.size_combo.config(state="disabled")
         self.version_entry.config(state="disabled")
+        self.learning_rate_entry.config(state="disabled")
 
         epochs = int(MODEL_PROFILES[size]["epochs"])
         self.progress["maximum"] = epochs
         self.progress["value"] = 0
         self.status_var.set("Training laeuft...")
-        self._append_log(f"Starte Training: size={size}, version={version}, backend=cpu")
+        self._append_log(f"Starte Training: size={size}, version={version}, lr={learning_rate}, backend=cpu")
 
         # Reset Plot
         for key in self.history_data:
@@ -566,16 +599,22 @@ class TrainingUI:
         self._setup_axes()
         self.canvas.draw()
 
-        thread = threading.Thread(target=self._worker, args=(size, version), daemon=True)
+        thread = threading.Thread(target=self._worker, args=(size, version, learning_rate), daemon=True)
         thread.start()
         self.root.after(150, self._poll_events)
 
-    def _worker(self, size: str, version: str) -> None:
+    def _worker(self, size: str, version: str, learning_rate: float) -> None:
         def callback(event: str, data: dict[str, Any]) -> None:
             self.event_queue.put((event, data))
 
         try:
-            metadata = train_model(size=size, version=version, callback=callback, early_stopping_patience=15)
+            metadata = train_model(
+                size=size,
+                version=version,
+                callback=callback,
+                early_stopping_patience=15,
+                learning_rate_override=learning_rate,
+            )
             self.event_queue.put(("success", {"metadata": metadata}))
         except Exception as exc:  # noqa: BLE001
             details = traceback.format_exc()
@@ -660,6 +699,7 @@ class TrainingUI:
         self.start_btn.config(state="normal")
         self.size_combo.config(state="readonly")
         self.version_entry.config(state="normal")
+        self.learning_rate_entry.config(state="normal")
 
 
 def run_ui() -> None:
@@ -674,7 +714,12 @@ def main() -> None:
     if args.no_ui:
         if args.version is None:
             raise SystemExit("Im --no-ui Modus ist --version Pflicht.")
-        run_cli(size=args.size, version=args.version, early_stopping_patience=args.early_stopping_patience)
+        run_cli(
+            size=args.size,
+            version=args.version,
+            early_stopping_patience=args.early_stopping_patience,
+            learning_rate=args.learning_rate,
+        )
         return
 
     run_ui()

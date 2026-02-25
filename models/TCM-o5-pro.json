@@ -1,6 +1,6 @@
 {
   "model_name": "TCM-o5-pro",
-  "created_at": "2026-02-25T18:05:13",
+  "created_at": "2026-02-25T18:46:16",
   "train_data_dir": "B:\\Antigravity und github repos\\TCM_AI\\data\\training",
   "test_data_dir": "B:\\Antigravity und github repos\\TCM_AI\\data\\testing",
   "size": "pro",
@@ -48,7 +48,7 @@
     "test_loss": 0.05423806530941157,
     "test_acc": 0.9901
   },
-  "training_time_seconds": 433.30617860000166,
+  "training_time_seconds": 319.98721079999996,
   "artifacts": {
     "model_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5-pro.npz",
     "plot_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5-pro_training.png",

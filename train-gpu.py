@@ -630,6 +630,18 @@ class OpenCLMLPTrainer:
     ) -> None:
         self.queue = queue
         self.program = program
+        # Cache kernel handles once to avoid repeated retrieval overhead/warnings.
+        self.k_matmul_bias_relu = cl.Kernel(self.program, "matmul_bias_relu")
+        self.k_matmul_at_b = cl.Kernel(self.program, "matmul_at_b")
+        self.k_matmul_a_bt = cl.Kernel(self.program, "matmul_a_bt")
+        self.k_softmax_xent_grad = cl.Kernel(self.program, "softmax_xent_grad")
+        self.k_softmax_metrics = cl.Kernel(self.program, "softmax_metrics")
+        self.k_reduce_sum_rows = cl.Kernel(self.program, "reduce_sum_rows")
+        self.k_relu_backprop_inplace = cl.Kernel(self.program, "relu_backprop_inplace")
+        self.k_sgd_update = cl.Kernel(self.program, "sgd_update")
+        self.k_adam_update = cl.Kernel(self.program, "adam_update")
+        self.k_gather_features = cl.Kernel(self.program, "gather_features")
+        self.k_gather_labels = cl.Kernel(self.program, "gather_labels")
         self.layer_sizes = [int(v) for v in layer_sizes]
         self.batch_size = int(batch_size)
         self.num_layers = len(self.layer_sizes) - 1
@@ -692,7 +704,7 @@ class OpenCLMLPTrainer:
         apply_relu: int,
     ) -> None:
         global_size = (_round_up(n, self.local_2d[0]), _round_up(m, self.local_2d[1]))
-        self.program.matmul_bias_relu(
+        self.k_matmul_bias_relu(
             self.queue,
             global_size,
             self.local_2d,
@@ -716,7 +728,7 @@ class OpenCLMLPTrainer:
         n: int,
     ) -> None:
         global_size = (_round_up(n, self.local_2d[0]), _round_up(k, self.local_2d[1]))
-        self.program.matmul_at_b(
+        self.k_matmul_at_b(
             self.queue,
             global_size,
             self.local_2d,
@@ -738,7 +750,7 @@ class OpenCLMLPTrainer:
         k: int,
     ) -> None:
         global_size = (_round_up(k, self.local_2d[0]), _round_up(m, self.local_2d[1]))
-        self.program.matmul_a_bt(
+        self.k_matmul_a_bt(
             self.queue,
             global_size,
             self.local_2d,
@@ -753,7 +765,7 @@ class OpenCLMLPTrainer:
     def _k_softmax_xent(self, m: int) -> None:
         inv_batch = np.float32(1.0 / float(m))
         global_size = (_round_up(m, self.local_1d[0]),)
-        self.program.softmax_xent_grad(
+        self.k_softmax_xent_grad(
             self.queue,
             global_size,
             self.local_1d,
@@ -769,7 +781,7 @@ class OpenCLMLPTrainer:
 
     def _k_softmax_metrics(self, m: int) -> None:
         global_size = (_round_up(m, self.local_1d[0]),)
-        self.program.softmax_metrics(
+        self.k_softmax_metrics(
             self.queue,
             global_size,
             self.local_1d,
@@ -783,7 +795,7 @@ class OpenCLMLPTrainer:
 
     def _k_reduce_sum_rows(self, a: CLArray, out: CLArray, m: int, n: int) -> None:
         global_size = (_round_up(n, self.local_1d[0]),)
-        self.program.reduce_sum_rows(
+        self.k_reduce_sum_rows(
             self.queue,
             global_size,
             self.local_1d,
@@ -795,7 +807,7 @@ class OpenCLMLPTrainer:
 
     def _k_relu_backprop_inplace(self, da: CLArray, activation: CLArray, size: int) -> None:
         global_size = (_round_up(size, self.local_1d[0]),)
-        self.program.relu_backprop_inplace(
+        self.k_relu_backprop_inplace(
             self.queue,
             global_size,
             self.local_1d,
@@ -806,7 +818,7 @@ class OpenCLMLPTrainer:
 
     def _k_sgd_update(self, param: CLArray, grad: CLArray, learning_rate: np.float32, size: int) -> None:
         global_size = (_round_up(size, self.local_1d[0]),)
-        self.program.sgd_update(
+        self.k_sgd_update(
             self.queue,
             global_size,
             self.local_1d,
@@ -820,7 +832,7 @@ class OpenCLMLPTrainer:
         beta1, beta2, epsilon = 0.9, 0.999, 1e-8
         size = param.size
         global_size = (_round_up(size, self.local_1d[0]),)
-        self.program.adam_update(
+        self.k_adam_update(
             self.queue,
             global_size,
             self.local_1d,
@@ -848,7 +860,7 @@ class OpenCLMLPTrainer:
         feat_dim = self.layer_sizes[0]
         global_feat = (_round_up(m, 16), _round_up(feat_dim, 16))
         local_feat = (16, 16)
-        self.program.gather_features(
+        self.k_gather_features(
             self.queue,
             global_feat,
             local_feat,
@@ -861,7 +873,7 @@ class OpenCLMLPTrainer:
         # Labels gather
         global_lab = (_round_up(m, 256),)
         local_lab = (256,)
-        self.program.gather_labels(
+        self.k_gather_labels(
             self.queue,
             global_lab,
             local_lab,
@@ -1518,6 +1530,8 @@ class TrainingUI:
         self.event_queue: Queue[tuple[str, dict[str, Any]]] = Queue()
         self.training_running = False
         self.stop_training_event = threading.Event()
+        self.worker_thread: threading.Thread | None = None
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.size_var = tk.StringVar(value="normal")
         self.version_var = tk.StringVar(value="1")
@@ -1632,9 +1646,28 @@ class TrainingUI:
         self._setup_axes()
         self.canvas.draw()
 
-        thread = threading.Thread(target=self._worker, args=(size, version), daemon=True)
-        thread.start()
+        self.worker_thread = threading.Thread(target=self._worker, args=(size, version), daemon=False)
+        self.worker_thread.start()
         self.root.after(150, self._poll_events)
+
+    def _on_close(self) -> None:
+        if self.training_running:
+            self.stop_training_event.set()
+            self.stop_btn.config(state="disabled")
+            self.status_var.set("Stop angefordert... Fenster schliesst nach Trainingsende.")
+            self._append_log("Fenster schliessen: Stop angefordert, warte auf sicheren Abbruch...")
+            self.root.after(150, self._wait_for_shutdown)
+            return
+        self.root.destroy()
+
+    def _wait_for_shutdown(self) -> None:
+        if self.training_running:
+            self.root.after(150, self._wait_for_shutdown)
+            return
+        if self.worker_thread is not None and self.worker_thread.is_alive():
+            self.root.after(150, self._wait_for_shutdown)
+            return
+        self.root.destroy()
 
     def stop_training(self) -> None:
         if not self.training_running:
@@ -1750,6 +1783,8 @@ class TrainingUI:
         self.stop_btn.config(state="disabled")
         self.size_combo.config(state="readonly")
         self.version_entry.config(state="normal")
+        if self.worker_thread is not None and not self.worker_thread.is_alive():
+            self.worker_thread = None
 
 
 def run_ui() -> None:
