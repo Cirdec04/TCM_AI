@@ -48,5 +48,9 @@
     "model_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o4.1-pro.npz",
     "plot_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o4.1-pro_training.png",
     "metadata_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o4.1-pro.json"
+  },
+  "parameters": {
+    "total": 10020874,
+    "human": "10.02M"
   }
 }

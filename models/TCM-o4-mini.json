@@ -26,5 +26,10 @@
     "model_file": "C:\\Users\\gesom\\TCM_AI\\models\\TCM-o4-mini.npz",
     "plot_file": "C:\\Users\\gesom\\TCM_AI\\models\\TCM-o4-mini_training.png",
     "metadata_file": "C:\\Users\\gesom\\TCM_AI\\models\\TCM-o4-mini.json"
+  },
+  "epochs_trained": 96,
+  "parameters": {
+    "total": 269322,
+    "human": "269.3K"
   }
 }

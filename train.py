@@ -139,6 +139,21 @@ def get_fixed_seed() -> int:
     return 42
 
 
+def count_parameters(layer_sizes: list[int]) -> int:
+    total = 0
+    for in_features, out_features in zip(layer_sizes[:-1], layer_sizes[1:], strict=False):
+        total += (in_features * out_features) + out_features
+    return int(total)
+
+
+def format_parameter_count(total: int) -> str:
+    if total >= 1_000_000:
+        return f"{total / 1_000_000:.2f}M"
+    if total >= 1_000:
+        return f"{total / 1_000:.1f}K"
+    return str(total)
+
+
 def save_training_plot(history: dict[str, list[float]], output_path: Path) -> None:
     epochs = np.arange(1, len(history["train_loss"]) + 1)
     epoch_count = len(epochs)
@@ -253,6 +268,8 @@ def train_model(
 
     effective_batch_size = batch_size
     test_eval_interval = 1
+    layer_sizes = [28 * 28] + [hidden_size] * hidden_layers + [10]
+    parameter_total = count_parameters(layer_sizes)
 
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
     rng = np.random.default_rng(seed)
@@ -364,6 +381,10 @@ def train_model(
         "effective_batch_size": effective_batch_size,
         "test_eval_interval": test_eval_interval,
         "optimizer": "adam",
+        "parameters": {
+            "total": int(parameter_total),
+            "human": format_parameter_count(parameter_total),
+        },
         "seed": seed,
         "compute_backend": "cpu",
         "early_stopping": {
