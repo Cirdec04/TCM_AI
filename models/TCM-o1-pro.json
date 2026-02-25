@@ -24,5 +24,11 @@
     "model_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o1-pro.npz",
     "plot_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o1-pro_training.png",
     "metadata_file": "B:\\Antigravity und github repos\\TCMAI\\TCM_AI\\models\\TCM-o1-pro.json"
+  },
+  "hidden_layers": 1,
+  "epochs_trained": 512,
+  "parameters": {
+    "total": 1628170,
+    "human": "1.63M"
   }
 }

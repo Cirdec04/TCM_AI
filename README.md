@@ -86,44 +86,44 @@ Alle Modelle liegen in `models/` als:
 
 - Daten: 10'000 total → 8'000 Train / 2'000 Test (80/20 Split aus `data/`).
 
-| Modell        | Daten (Train/Test) | hidden | epochs | batch size | Learning Rate | finale Test-Accuracy |
-|---|---:|---:|---:|---:|---:|---:|
-| `TCM-o1-mini` | 8'000 / 2'000      | 128    | 128    | 256   | 0.008 | 0.9185          |
-| `TCM-o1`      | 8'000 / 2'000      | 512    | 256    | 256   | 0.005 | 0.9125          |
-| `TCM-o1-pro`  | 8'000 / 2'000      | 2048   | 512    | 512   | 0.003 | 0.9145          |
+| Modell        | Daten (Train/Test) | hidden | hidden layers | parameters | epochs | batch size | Learning Rate | finale Test-Accuracy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `TCM-o1-mini` | 8'000 / 2'000      | 128    | 1 | 101.77K | 128    | 256   | 0.008 | 0.9185          |
+| `TCM-o1`      | 8'000 / 2'000      | 512    | 1 | 407.05K | 256    | 256   | 0.005 | 0.9125          |
+| `TCM-o1-pro`  | 8'000 / 2'000      | 2048   | 1 | 1.63M | 512    | 512   | 0.003 | 0.9145          |
 
 ### Familie `TCM-o2` (Optimierte o1, könnte auf o1.1 genannt worden sein...)
 
 - Daten: 10'000 Train / 2'000 Test (aus `data/training` und `data/testing`).
 - Änderung ggü. `TCM-o1`: Wechsel von internem Split auf feste Ordner und fester Seed (42). Optimiertere Parameter.
 
-| Modell        | Daten (Train/Test) | hidden | epochs | batch size | Learning Rate | finale Test-Accuracy |
-|---|---:|---:|---:|---:|---:|---:|
-| `TCM-o2-mini` | 10'000 / 2'000     | 128    | 64     | 256   | 0.008 | 0.9250          |
-| `TCM-o2`      | 10'000 / 2'000     | 512    | 128    | 256   | 0.005 | 0.9370          |
-| `TCM-o2-pro`  | 10'000 / 2'000     | 2048   | 512    | 512   | 0.003 | 0.9485          |
+| Modell        | Daten (Train/Test) | hidden | hidden layers | parameters | epochs | batch size | Learning Rate | finale Test-Accuracy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `TCM-o2-mini` | 10'000 / 2'000     | 128    | 1 | 101.77K | 64     | 256   | 0.008 | 0.9250          |
+| `TCM-o2`      | 10'000 / 2'000     | 512    | 1 | 407.05K | 128    | 256   | 0.005 | 0.9370          |
+| `TCM-o2-pro`  | 10'000 / 2'000     | 2048   | 1 | 1.63M | 512    | 512   | 0.003 | 0.9485          |
 
 ### Familie `TCM-o3` (FULL DATASET and better Parameters)
 
 - Daten: 60'000 Train / 10'000 Test (aus `data/training` und `data/testing`).
 - Änderung ggü. `TCM-o2`: Wechsel von Reduced-Dataset (10'000/2'000) auf Full-Dataset (60'000/10'000). Optimiertere Parameter.
 
-| Modell        | Daten (Train/Test) | hidden | epochs | batch size | Learning Rate    | finale Test-Accuracy |
-|---|---:|---:|---:|---:|---:|---:|
-| `TCM-o3-mini` | 60'000 / 10'000    | 128    | 64     | 256   | 0.008 | 0.9431          |
-| `TCM-o3`      | 60'000 / 10'000    | 512    | 128    | 256   | 0.005 | 0.9526          |
-| `TCM-o3-pro`  | 60'000 / 10'000    | 2048   | 512    | 512   | 0.003 | 0.9603          |
+| Modell        | Daten (Train/Test) | hidden | hidden layers | parameters | epochs | batch size | Learning Rate    | finale Test-Accuracy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `TCM-o3-mini` | 60'000 / 10'000    | 128    | 1 | 101.77K | 64     | 256   | 0.008 | 0.9431          |
+| `TCM-o3`      | 60'000 / 10'000    | 512    | 1 | 407.05K | 128    | 256   | 0.005 | 0.9526          |
+| `TCM-o3-pro`  | 60'000 / 10'000    | 2048   | 1 | 1.63M | 512    | 512   | 0.003 | 0.9603          |
 
 ### Familie `TCM-o4` (Full Dataset, hidden layers)
 
 - Daten: 60'000 Train / 10'000 Test (aus `data/training` und `data/testing`).
 - Änderung ggü. `TCM-o3`:  Optimiertere Parameter. Anstatt 1 nun 2-3 Hidden Layers.
 
-| Modell        | Daten (Train/Test) | hidden | epochs | batch size | Learning Rate | finale Test-Accuracy |
-|---|---:|---:|---:|---:|---:|---:|
-| `TCM-o4-mini` | 60'000 / 10'000    | 256    | 96     | 128   | 0.0025 | 0.9608 |
-| `TCM-o4`      | 60'000 / 10'000    | 512    | 192    | 128   | 0.0015 | 0.9652          |
-| `TCM-o4.1-pro`| 60'000 / 10'000    | 2048   | 512    | 512   | Adam   | 0.9832          |
+| Modell        | Daten (Train/Test) | hidden | hidden layers | parameters | epochs | batch size | Learning Rate | finale Test-Accuracy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `TCM-o4-mini` | 60'000 / 10'000    | 256    | 2 | 269.32K | 96     | 128   | 0.0025 | 0.9608 |
+| `TCM-o4`      | 60'000 / 10'000    | 512    | 2 | 669.71K | 192    | 128   | 0.0015 | 0.9652          |
+| `TCM-o4.1-pro`| 60'000 / 10'000    | 2048   | 3 | 10.02M | 512    | 512   | Adam   | 0.9832          |
 
 Notiz zu `TCM-o4.1`:
 - Nutzt bereits den **Adam-Optimizer**.
