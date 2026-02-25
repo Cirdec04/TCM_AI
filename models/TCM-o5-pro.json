@@ -1,0 +1,57 @@
+{
+  "model_name": "TCM-o5-pro",
+  "created_at": "2026-02-25T18:05:13",
+  "train_data_dir": "B:\\Antigravity und github repos\\TCM_AI\\data\\training",
+  "test_data_dir": "B:\\Antigravity und github repos\\TCM_AI\\data\\testing",
+  "size": "pro",
+  "hidden_size": 2048,
+  "hidden_layers": 3,
+  "epochs": 512,
+  "epochs_trained": 18,
+  "batch_size": 512,
+  "effective_batch_size": 512,
+  "test_eval_interval": 1,
+  "optimizer": "adam",
+  "parameters": {
+    "total": 10020874,
+    "human": "10.02M"
+  },
+  "seed": 42,
+  "early_stopping": {
+    "enabled": true,
+    "patience": 5,
+    "stopped_early": true,
+    "best_test_acc": 0.99074,
+    "best_test_epoch": 13
+  },
+  "stopped_by_user": false,
+  "compute_backend": "opencl",
+  "backend_info": {
+    "platform_index": 0,
+    "device_index": 0,
+    "platform_name": "AMD Accelerated Parallel Processing",
+    "device_name": "gfx1031",
+    "vendor": "Advanced Micro Devices, Inc.",
+    "driver_version": "3652.0 (PAL,LC)",
+    "compute_units": 20,
+    "global_mem_mb": 12272,
+    "fast_math": true
+  },
+  "samples": {
+    "total": 350000,
+    "train": 300000,
+    "test": 50000
+  },
+  "final_metrics": {
+    "train_loss": 0.009173891406330783,
+    "train_acc": 0.9975169315273038,
+    "test_loss": 0.05423806530941157,
+    "test_acc": 0.9901
+  },
+  "training_time_seconds": 433.30617860000166,
+  "artifacts": {
+    "model_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5-pro.npz",
+    "plot_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5-pro_training.png",
+    "metadata_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5-pro.json"
+  }
+}
