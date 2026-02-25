@@ -136,7 +136,6 @@ Notiz zu `TCM-o4.1`:
   - **Adam Optimizer**: Wechsel vom einfachen SGD auf den Adam-Optimizer.
   - **Live-Graphen w�hrend dem trainieren**: Echtzeit-Visualisierung von Loss und Accuracy w�hrend dem trainieren.
   - Early Stopping mit patience 5
-  - **Huge Leap** Alle Modelle werden manuell noch getestet und die o5-Familie erkennt extrem viel mehr als alle vorderen. dies liegt vermutlich vor allem am grösseren Trainingsdatensatz.
 
 | Modell        | Daten (Train/Test) | hidden | hidden layers | parameters | epochs | batch size | Learning Rate | finale Test-Accuracy |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -144,5 +143,8 @@ Notiz zu `TCM-o4.1`:
 | `TCM-o5`      | 300'000 / 50'000   | 512    | 2 | 669.7K | 19     | 512   | Adam | 0.9902 |
 | `TCM-o5-pro`  | 300'000 / 50'000   | 2048   | 3 | 10.02M | 18     | 512   | Adam | 0.9901 |
 
-Notiz zu `TCM-o4.1`:
-- Benchmark zeigt es schlechter an als es sich anfühlt. Beim ausprobieren war es merkbar besser als o5.
+Notiz zu `TCM-o5-pro`:
+Benchmark zeigt es schlechter an als es sich anfühlt. Beim ausprobieren war es merkbar besser als o5.
+
+Notiz zu `TCM-o5-Familie`:
+Alle Modelle werden manuell noch getestet und die o5-Familie erkennt extrem viel mehr als alle vorderen. dies liegt vermutlich vor allem am grösseren Trainingsdatensatz.
