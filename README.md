@@ -135,3 +135,8 @@ Notiz zu `TCM-o4.1`:
 - Änderung ggü. `TCM-o4`: 
   - **Adam Optimizer**: Wechsel vom einfachen SGD auf den Adam-Optimizer.
   - **Live-Graphen während dem trainieren**: Echtzeit-Visualisierung von Loss und Accuracy während dem trainieren.
+  - Early Stopping mit patience 5
+
+| Modell        | Daten (Train/Test) | hidden | hidden layers | parameters | epochs | batch size | Learning Rate | finale Test-Accuracy |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `TCM-o5-mini` | 300'000 / 50'000   | 256    | 2 | 269.3K | 11     | 512   | Adam (0.0015) | 0.9881 |
