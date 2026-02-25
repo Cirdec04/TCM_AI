@@ -31,8 +31,6 @@
   - Zeichnung wird als Ziffer (0-9) vorhergesagt und angezeigt.
 - `requirements.txt`
   - Benötigte Python-Pakete für Training und App.
-- `requirements-gpu.txt`
-  - Optionale Pakete für GPU/OpenCL-Betrieb (`pyopencl`).
 
 ## Ziel von `app.py`
 
@@ -46,21 +44,9 @@
 - Trainingsprozess soll nachvollziehbar sein (Forward Pass, Fehlerberechnung, Backpropagation, Gradient Descent).
 - Das Modell soll auf (reduced) MNIST Ziffernklassifikation ausgerichtet sein.
 
-## Rechenbackend (CPU/GPU)
+## Rechenbackend
 
-- Training und App unterstützen eine Backend-Auswahl: `cpu` oder `gpu`.
-- `cpu` bedeutet: komplette Berechnung mit `NumPy`.
-- `gpu` bedeutet: optionales OpenCL-Backend mit `PyOpenCL` (geeignet für AMD-GPUs mit OpenCL-Treiber).
-
-### 100% Regelkonformer Weg
-
-- Für 100% regelkonformen Betrieb: `cpu` (nur `NumPy` als Rechenbackend).
-
-### Optionaler GPU-Weg (Mit pyOpenCL)
-- CPU ist ab o4-pro überfordert und bräuchte Stunden.
-- GPU ist als optionaler Beschleunigungsweg implementiert und klar als Zusatz markiert.
-- Beim Start wird GPU/OpenCL aktiv geprüft. Falls nicht nutzbar, bricht der Lauf mit klarer Fehlermeldung ab (strict GPU mode, kein CPU-Fallback).
-- In den Modell-Metadaten (`models/*.json`) stehen `requested_backend`, `active_backend`, `backend_note` und `backend_info`.
+- Training und App laufen CPU-only mit `NumPy`.
 
 ## Datenquelle
 

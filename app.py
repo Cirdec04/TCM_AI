@@ -35,7 +35,6 @@ class DigitApp:
         self.model_name: str | None = None
 
         self.model_var = tk.StringVar()
-        self.device_var = tk.StringVar(value="cpu")
         self.result_var = tk.StringVar(value="Noch keine Idee.")
 
         self._build_ui()
@@ -49,12 +48,6 @@ class DigitApp:
         self.model_combo = ttk.Combobox(top_frame, textvariable=self.model_var, state="readonly", width=30)
         self.model_combo.pack(side="left", padx=8)
         self.model_combo.bind("<<ComboboxSelected>>", self.on_model_changed)
-
-        # UI-Schalter fuer Rechenbackend bei der Inferenz.
-        ttk.Label(top_frame, text="Backend:").pack(side="left", padx=(10, 0))
-        self.device_combo = ttk.Combobox(top_frame, textvariable=self.device_var, state="readonly", values=["cpu", "gpu"], width=8)
-        self.device_combo.pack(side="left", padx=8)
-        self.device_combo.bind("<<ComboboxSelected>>", self.on_device_changed)
 
         ttk.Button(top_frame, text="Refresh", command=self.refresh_model_list).pack(side="left")
 
@@ -113,7 +106,7 @@ class DigitApp:
             self.model_var.set("")
             self.model = None
             self.model_name = None
-            self.result_var.set(f"Keine Modelle gefunden")
+            self.result_var.set("Keine Modelle gefunden")
             return
 
         if self.model_var.get() not in model_files:
@@ -122,10 +115,6 @@ class DigitApp:
         self.load_selected_model()
 
     def on_model_changed(self, _event: tk.Event) -> None:
-        self.load_selected_model()
-        self.update_prediction(silent=True)
-
-    def on_device_changed(self, _event: tk.Event) -> None:
         self.load_selected_model()
         self.update_prediction(silent=True)
 
@@ -138,17 +127,13 @@ class DigitApp:
 
         model_path = self.models_dir / selected
         try:
-            requested_backend = self.device_var.get().strip().lower()
-            model, metadata = SimpleMLP.load(model_path, backend=requested_backend)
+            model, metadata = SimpleMLP.load(model_path, backend="cpu")
             self.model = model
             self.model_name = selected
             size_info = metadata.get("size", "unbekannt")
-            backend_info = f"requested={requested_backend}, active={model.backend}"
-            if model.backend_note:
-                backend_info += f" ({model.backend_note})"
             self.result_var.set(
                 f"Modell geladen: {selected} (size: {size_info})\n"
-                f"Backend: {backend_info}\n"
+                f"Backend: cpu\n"
                 f"Ordner: {self.models_dir}"
             )
         except Exception as exc:  # noqa: BLE001
@@ -191,7 +176,7 @@ class DigitApp:
     def clear_canvas(self) -> None:
         self.grid.fill(0.0)
         self.canvas.itemconfig("pixel", fill="black")
-        self.result_var.set("Zeichnung gelöscht. Zeichne eine Ziffer.")
+        self.result_var.set("Zeichnung geloescht. Zeichne eine Ziffer.")
 
     def update_prediction(self, silent: bool = True) -> None:
         if self.model is None or self.model_name != self.model_var.get().strip():
@@ -218,7 +203,7 @@ class DigitApp:
 def main() -> None:
     root = tk.Tk()
     models_dir = MODELS_DIR
-    app = DigitApp(root, models_dir=models_dir)
+    DigitApp(root, models_dir=models_dir)
     root.mainloop()
 
 
