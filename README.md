@@ -22,7 +22,11 @@
   - Lädt/liest die Trainingsdaten aus `data/`.
   - Trainiert das neuronale Netz.
   - Speichert das trainierte Modell nach `models/`.
-  - Konfigurierbar (Modellgrössen wie mini/normal/pro).
+  - Konfigurierbar (Modellgrössen: mini/normal/pro).
+- `train-gpu.py`
+  - Eigenständiges GPU-Training per `pyopencl` (ohne UI).
+  - Erstellt kompatible Artefakte (`.npz`, `.json`, `_training.png`) im gleichen Format wie `train.py`.
+  - Bevorzugt automatisch GPU-Geraete (inkl. AMD) und kann Plattform/Gerät explizit waehlen.
 - `nn.py`
   - Enthält den gemeinsamen NN-Code (Netzwerk, Vorhersage, Laden/Speichern).
 - `app.py`
@@ -46,7 +50,72 @@
 
 ## Rechenbackend
 
-- Training und App laufen CPU-only mit `NumPy`.
+- `app.py` und `train.py` laufen CPU-only mit `NumPy`.
+- Fuer beschleunigtes Training gibt es zusaetzlich `train-gpu.py` mit OpenCL (`pyopencl`).
+
+## GPU-Training mit `train-gpu.py` (OpenCL, inkl. AMD)
+
+### 1) Voraussetzungen
+
+- Python-Umgebung wie bisher (siehe `requirements.txt`).
+- Zusaetzlich: `pyopencl`
+  - Installation: `pip install pyopencl`
+- Funktionierende OpenCL-Treiber/Laufzeit:
+  - AMD unter Windows: aktueller Adrenalin-Treiber (enthaelt OpenCL Runtime).
+  - AMD unter Linux: OpenCL-faehige ROCm/AMDGPU-Installation inkl. ICD.
+
+### 2) OpenCL-Geraete pruefen
+
+```bash
+python train-gpu.py --list-devices
+```
+
+Das zeigt Plattform- und Geraete-Indizes im Format `[platform:device]`.
+
+### 3) Training starten
+
+Automatische Geraetewahl (GPU bevorzugt, AMD priorisiert wenn verfuegbar):
+
+```bash
+python train-gpu.py --size normal --version 4.1
+```
+
+Explizite Geraetewahl (z. B. AMD-Karte):
+
+```bash
+python train-gpu.py --platform-index 0 --device-index 0 --size pro --version 4.2
+```
+
+Optional fuer mehr Durchsatz:
+
+```bash
+python train-gpu.py --size pro --version 4.3 --batch-size-override 512
+```
+
+Nuetzliche Optionen:
+
+- `--batch-size-override N`: groessere Batchgroesse fuer mehr GPU-Auslastung.
+- `--test-eval-interval N`: Test-Set nur alle N Epochen (reduziert Overhead).
+- `--no-fast-math`: deaktiviert aggressive OpenCL-Math-Optimierungen.
+
+### 4) Output/Kompatibilitaet
+
+`train-gpu.py` schreibt wie `train.py` nach `models/`:
+
+- `<name>.npz` (Gewichte)
+- `<name>.json` (Metadaten, inkl. OpenCL-Backend-Infos)
+- `<name>_training.png` (Trainingskurve)
+
+Die Artefakte sind mit der bestehenden `app.py` kompatibel.
+
+### 5) Performance-Hinweise
+
+- Der groesste Speedup kommt auf echten GPUs mit gutem OpenCL-Treiber.
+- Fuer `normal`/`pro` sind groessere Batches meist schneller als CPU.
+- Falls es nicht deutlich schneller ist:
+  - richtige GPU explizit waehlen (`--platform-index`, `--device-index`)
+  - Batchgroesse erhoehen (`--batch-size-override`)
+  - Hintergrundlast auf der GPU reduzieren.
 
 ## Datenquelle
 
