@@ -123,6 +123,11 @@ Alle Modelle liegen in `models/` als:
 |---|---:|---:|---:|---:|---:|---:|
 | `TCM-o4-mini` | 60'000 / 10'000    | 256    | 96     | 128   | 0.0025 | 0.9608 |
 | `TCM-o4`      | 60'000 / 10'000    | 512    | 192    | 128   | 0.0015 | 0.9652          |
+| `TCM-o4.1-pro`| 60'000 / 10'000    | 2048   | 512    | 512   | Adam   | 0.9832          |
+
+Notiz zu `TCM-o4.1`:
+- Nutzt bereits den **Adam-Optimizer**.
+- Alle anderen Kern-Einstellungen (Datenbasis, Modellprofil/Familie `o4`) bleiben wie bei `o4`.
 
 ### Familie `TCM-o5` (Mega Dataset & Adam Optimizer)
 

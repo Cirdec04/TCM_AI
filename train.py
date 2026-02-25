@@ -40,23 +40,21 @@ MODEL_PROFILES = {
         "hidden_layers": 2,
         "epochs": 96,
         "batch_size": 512,
-        "learning_rate": 0.0025,
     },
     "normal": {
         "hidden_size": 512,
         "hidden_layers": 2,
         "epochs": 192,
         "batch_size": 512,
-        "learning_rate": 0.0015,
     },
     "pro": {
         "hidden_size": 2048,
         "hidden_layers": 3,
         "epochs": 512,
         "batch_size": 512,
-        "learning_rate": 0.001,
     },
 }
+ADAM_LEARNING_RATE = 0.0015
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
@@ -207,7 +205,7 @@ def train_model(
     hidden_layers = int(profile["hidden_layers"])
     epochs = int(profile["epochs"])
     batch_size = int(profile["batch_size"])
-    learning_rate = float(profile["learning_rate"])
+    learning_rate = ADAM_LEARNING_RATE
     seed = get_fixed_seed()
 
     model_name = build_model_name(version=version, size=size)
@@ -233,7 +231,7 @@ def train_model(
         message=(
             "Training startet mit: "
             f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
-            f"batch_size={batch_size}, learning_rate={learning_rate}, seed={seed}, "
+            f"batch_size={batch_size}, optimizer=adam, seed={seed}, "
             f"early_stopping_patience={early_stopping_patience}"
         ),
     )
@@ -365,7 +363,7 @@ def train_model(
         "batch_size": batch_size,
         "effective_batch_size": effective_batch_size,
         "test_eval_interval": test_eval_interval,
-        "learning_rate": learning_rate,
+        "optimizer": "adam",
         "seed": seed,
         "compute_backend": "cpu",
         "early_stopping": {
@@ -504,7 +502,7 @@ class TrainingUI:
                 f"layers={int(profile['hidden_layers'])}, "
                 f"epochs={int(profile['epochs'])}, "
                 f"batch={int(profile['batch_size'])}, "
-                f"lr={float(profile['learning_rate'])}"
+                "optimizer=adam"
             )
         )
 
