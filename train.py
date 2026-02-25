@@ -13,6 +13,9 @@ from queue import Empty, Queue
 from tkinter import messagebox, ttk
 from typing import Any, Callable
 
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.figure as mpl_fig
+
 from deps import ensure_requirements_installed
 
 ensure_requirements_installed(required_modules=("numpy", "matplotlib", "PIL"))
@@ -377,6 +380,9 @@ class TrainingUI:
         self.version_var = tk.StringVar(value="1")
         self.status_var = tk.StringVar(value="Bereit")
 
+        # Live-Plot Daten
+        self.history_data = {"epochs": [], "train_loss": [], "test_loss": [], "train_acc": [], "test_acc": []}
+
         self._build_ui()
         self._refresh_profile_label()
 
@@ -402,10 +408,31 @@ class TrainingUI:
         self.progress = ttk.Progressbar(frame, mode="determinate", length=360)
         self.progress.grid(row=4, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
-        ttk.Label(frame, textvariable=self.status_var).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
-
-        self.log_text = tk.Text(frame, width=70, height=12, state="disabled")
+        self.log_text = tk.Text(frame, width=70, height=8, state="disabled")
         self.log_text.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
+
+        # Live Plot Bereich
+        self.fig = mpl_fig.Figure(figsize=(7, 3), dpi=100)
+        self.ax_loss = self.fig.add_subplot(1, 2, 1)
+        self.ax_acc = self.fig.add_subplot(1, 2, 2)
+        self.fig.tight_layout(pad=3.0)
+
+        self._setup_axes()
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=frame)
+        self.canvas_widget = self.canvas.get_tk_widget()
+        self.canvas_widget.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10, 0))
+
+    def _setup_axes(self) -> None:
+        self.ax_loss.clear()
+        self.ax_loss.set_title("Loss")
+        self.ax_loss.set_xlabel("Epoch")
+        self.ax_loss.set_ylim(0, 2.5)
+
+        self.ax_acc.clear()
+        self.ax_acc.set_title("Accuracy")
+        self.ax_acc.set_xlabel("Epoch")
+        self.ax_acc.set_ylim(0, 1.0)
 
     def _refresh_profile_label(self) -> None:
         profile = MODEL_PROFILES[self.size_var.get()]
@@ -452,6 +479,12 @@ class TrainingUI:
         self.status_var.set("Training laeuft...")
         self._append_log(f"Starte Training: size={size}, version={version}, backend=cpu")
 
+        # Reset Plot
+        for key in self.history_data:
+            self.history_data[key] = []
+        self._setup_axes()
+        self.canvas.draw()
+
         thread = threading.Thread(target=self._worker, args=(size, version), daemon=True)
         thread.start()
         self.root.after(150, self._poll_events)
@@ -494,6 +527,30 @@ class TrainingUI:
                 )
                 self._append_log(msg)
                 self.status_var.set(f"Epoch {epoch}/{epochs}")
+
+                # Update Plot
+                self.history_data["epochs"].append(epoch)
+                self.history_data["train_loss"].append(float(data["train_loss"]))
+                self.history_data["test_loss"].append(float(data["test_loss"]))
+                self.history_data["train_acc"].append(float(data["train_acc"]))
+                self.history_data["test_acc"].append(float(data["test_acc"]))
+
+                self.ax_loss.clear()
+                self.ax_loss.set_title("Loss")
+                self.ax_loss.plot(self.history_data["epochs"], self.history_data["train_loss"], "b-", label="Train")
+                self.ax_loss.plot(self.history_data["epochs"], self.history_data["test_loss"], "r-", label="Test")
+                self.ax_loss.legend(fontsize="small")
+                self.ax_loss.set_ylim(0, max(2.5, max(self.history_data["train_loss"]) * 1.1 if self.history_data["train_loss"] else 2.5))
+
+                self.ax_acc.clear()
+                self.ax_acc.set_title("Accuracy")
+                self.ax_acc.plot(self.history_data["epochs"], self.history_data["train_acc"], "b-", label="Train")
+                self.ax_acc.plot(self.history_data["epochs"], self.history_data["test_acc"], "r-", label="Test")
+                self.ax_acc.legend(fontsize="small", loc="lower right")
+                self.ax_acc.set_ylim(0, 1.05)
+
+                self.fig.tight_layout(pad=3.0)
+                self.canvas.draw()
             elif event == "success":
                 metadata = data.get("metadata", {})
                 final_metrics = metadata.get("final_metrics", {}) if isinstance(metadata, dict) else {}

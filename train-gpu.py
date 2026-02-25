@@ -14,6 +14,9 @@ from queue import Empty, Queue
 from tkinter import messagebox, ttk
 from typing import Any, Callable
 
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.figure as mpl_fig
+
 from deps import ensure_requirements_installed
 
 ensure_requirements_installed(required_modules=("numpy", "matplotlib", "PIL"))
@@ -337,6 +340,34 @@ __kernel void sgd_update(
         return;
     }
     param[idx] -= learning_rate * grad[idx];
+}
+
+__kernel void gather_features(
+    __global const float* full_data,
+    __global const int* indices,
+    __global float* out_batch,
+    const int num_indices,
+    const int feature_dim
+){
+    const int i = get_global_id(0);
+    const int f = get_global_id(1);
+    if (i < num_indices && f < feature_dim) {
+        const int src_idx = indices[i];
+        out_batch[i * feature_dim + f] = full_data[src_idx * feature_dim + f];
+    }
+}
+
+__kernel void gather_labels(
+    __global const int* full_labels,
+    __global const int* indices,
+    __global int* out_batch,
+    const int num_indices
+){
+    const int i = get_global_id(0);
+    if (i < num_indices) {
+        const int src_idx = indices[i];
+        out_batch[i] = full_labels[src_idx];
+    }
 }
 """
 
@@ -717,6 +748,40 @@ class OpenCLMLPTrainer:
             np.int32(size),
         )
 
+    def _k_gather_batch(
+        self,
+        full_x: cl_array.Array,
+        full_y: cl_array.Array,
+        indices_gpu: cl_array.Array,
+        m: int,
+    ) -> None:
+        # Features gather
+        feat_dim = self.layer_sizes[0]
+        global_feat = (_round_up(m, 16), _round_up(feat_dim, 16))
+        local_feat = (16, 16)
+        self.program.gather_features(
+            self.queue,
+            global_feat,
+            local_feat,
+            full_x.data,
+            indices_gpu.data,
+            self.activations[0].data,
+            np.int32(m),
+            np.int32(feat_dim),
+        )
+        # Labels gather
+        global_lab = (_round_up(m, 256),)
+        local_lab = (256,)
+        self.program.gather_labels(
+            self.queue,
+            global_lab,
+            local_lab,
+            full_y.data,
+            indices_gpu.data,
+            self.labels.data,
+            np.int32(m),
+        )
+
     def _forward(self, m: int) -> None:
         for layer_idx in range(self.hidden_layers):
             prev_size = self.layer_sizes[layer_idx]
@@ -823,6 +888,29 @@ class OpenCLMLPTrainer:
                 size=self.biases[layer_idx].size,
             )
 
+    def train_batch_vram(
+        self,
+        full_x_gpu: cl_array.Array,
+        full_y_gpu: cl_array.Array,
+        indices_gpu: cl_array.Array,
+        m: int,
+        learning_rate: float,
+    ) -> tuple[float, float]:
+        if m <= 0:
+            return 0.0, 0.0
+
+        self._k_gather_batch(full_x_gpu, full_y_gpu, indices_gpu, m)
+        self._forward(m)
+        self._k_softmax_xent(m)
+
+        self.sample_loss.get(queue=self.queue, ary=self.host_loss)
+        self.sample_correct.get(queue=self.queue, ary=self.host_correct)
+        batch_loss = float(np.mean(self.host_loss[:m]))
+        batch_acc = float(np.mean(self.host_correct[:m]))
+
+        self._backward_and_update(m, learning_rate=learning_rate)
+        return batch_loss, batch_acc
+
     def train_batch(self, x_batch: np.ndarray, y_batch: np.ndarray, learning_rate: float) -> tuple[float, float]:
         m = int(x_batch.shape[0])
         if m <= 0:
@@ -856,6 +944,35 @@ class OpenCLMLPTrainer:
             self.activations[0][:m].set(np.asarray(x_eval[start:end], dtype=np.float32), queue=self.queue)
             self.labels[:m].set(np.asarray(y_eval[start:end], dtype=np.int32), queue=self.queue)
 
+            self._forward(m)
+            self._k_softmax_metrics(m)
+
+            self.sample_loss.get(queue=self.queue, ary=self.host_loss)
+            self.sample_correct.get(queue=self.queue, ary=self.host_correct)
+            total_loss += float(np.sum(self.host_loss[:m], dtype=np.float64))
+            total_correct += int(np.sum(self.host_correct[:m], dtype=np.int64))
+
+        if total_samples <= 0:
+            return 0.0, 0.0
+        return total_loss / float(total_samples), total_correct / float(total_samples)
+
+    def evaluate_vram(self, x_eval_gpu: cl_array.Array, y_eval_gpu: cl_array.Array) -> tuple[float, float]:
+        total_loss = 0.0
+        total_correct = 0
+        total_samples = int(x_eval_gpu.shape[0])
+
+        # Wir brauchen temporäre Indizes für die Auswertung
+        eval_indices = np.arange(total_samples, dtype=np.int32)
+        indices_gpu = cl_array.empty(self.queue, (self.batch_size,), dtype=np.int32)
+
+        for start in range(0, total_samples, self.batch_size):
+            end = min(start + self.batch_size, total_samples)
+            m = end - start
+            if m <= 0:
+                continue
+
+            indices_gpu[:m].set(eval_indices[start:end], queue=self.queue)
+            self._k_gather_batch(x_eval_gpu, y_eval_gpu, indices_gpu, m)
             self._forward(m)
             self._k_softmax_metrics(m)
 
@@ -993,6 +1110,7 @@ def train_model_gpu(
             f"Artefakt fuer '{model_name}' existiert bereits (.npz/.json/.png). Bitte andere Version waehlen."
         )
 
+    _emit(callback, "info", message="Initialisiere OpenCL und bereite Kernel vor...")
     context, queue, program, selected_device = create_opencl_context(
         platform_index=platform_index,
         device_index=device_index,
@@ -1047,17 +1165,29 @@ def train_model_gpu(
     num_batches = (train_count + effective_batch_size - 1) // effective_batch_size
     progress_every = max(1, num_batches // 4)
 
+    _emit(callback, "info", message="Übertrage vollständigen Datensatz in den VRAM...")
+    x_train_gpu = cl_array.to_device(queue, x_train)
+    y_train_gpu = cl_array.to_device(queue, y_train.astype(np.int32))
+    x_test_gpu = cl_array.to_device(queue, x_test)
+    y_test_gpu = cl_array.to_device(queue, y_test.astype(np.int32))
+    indices_gpu = cl_array.empty(queue, (effective_batch_size,), dtype=np.int32)
+
     for epoch in range(1, epochs + 1):
-        indices = rng.permutation(train_count)
+        indices = rng.permutation(train_count).astype(np.int32)
         batch_losses: list[float] = []
         batch_accs: list[float] = []
 
         for batch_idx, start in enumerate(range(0, train_count, effective_batch_size), start=1):
             end = min(start + effective_batch_size, train_count)
+            m = end - start
             batch_indices = indices[start:end]
-            x_batch = x_train[batch_indices]
-            y_batch = y_train[batch_indices]
-            batch_loss, batch_acc = trainer.train_batch(x_batch, y_batch, learning_rate=learning_rate)
+            
+            # Nur die Indizes zur GPU schicken (kleiner Overhead)
+            indices_gpu[:m].set(batch_indices, queue=queue)
+
+            batch_loss, batch_acc = trainer.train_batch_vram(
+                x_train_gpu, y_train_gpu, indices_gpu, m, learning_rate=learning_rate
+            )
             batch_losses.append(batch_loss)
             batch_accs.append(batch_acc)
 
@@ -1073,7 +1203,7 @@ def train_model_gpu(
 
         should_eval_test = (epoch == 1) or (epoch % test_eval_interval == 0) or (epoch == epochs)
         if should_eval_test:
-            test_loss, test_acc = trainer.evaluate(x_test, y_test)
+            test_loss, test_acc = trainer.evaluate_vram(x_test_gpu, y_test_gpu)
         else:
             test_loss = float(history["test_loss"][-1]) if history["test_loss"] else 0.0
             test_acc = float(history["test_acc"][-1]) if history["test_acc"] else 0.0
@@ -1193,6 +1323,9 @@ class TrainingUI:
         self.version_var = tk.StringVar(value="1")
         self.status_var = tk.StringVar(value="Bereit")
 
+        # Live-Plot Daten
+        self.history_data = {"epochs": [], "train_loss": [], "test_loss": [], "train_acc": [], "test_acc": []}
+
         self._build_ui()
         self._refresh_profile_label()
 
@@ -1218,10 +1351,31 @@ class TrainingUI:
         self.progress = ttk.Progressbar(frame, mode="determinate", length=360)
         self.progress.grid(row=4, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
-        ttk.Label(frame, textvariable=self.status_var).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
-
-        self.log_text = tk.Text(frame, width=70, height=12, state="disabled")
+        self.log_text = tk.Text(frame, width=70, height=8, state="disabled")
         self.log_text.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
+
+        # Live Plot Bereich
+        self.fig = mpl_fig.Figure(figsize=(7, 3), dpi=100)
+        self.ax_loss = self.fig.add_subplot(1, 2, 1)
+        self.ax_acc = self.fig.add_subplot(1, 2, 2)
+        self.fig.tight_layout(pad=3.0)
+
+        self._setup_axes()
+
+        self.canvas = FigureCanvasTkAgg(self.fig, master=frame)
+        self.canvas_widget = self.canvas.get_tk_widget()
+        self.canvas_widget.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10, 0))
+
+    def _setup_axes(self) -> None:
+        self.ax_loss.clear()
+        self.ax_loss.set_title("Loss")
+        self.ax_loss.set_xlabel("Epoch")
+        self.ax_loss.set_ylim(0, 2.5)
+
+        self.ax_acc.clear()
+        self.ax_acc.set_title("Accuracy")
+        self.ax_acc.set_xlabel("Epoch")
+        self.ax_acc.set_ylim(0, 1.0)
 
     def _refresh_profile_label(self) -> None:
         profile = MODEL_PROFILES[self.size_var.get()]
@@ -1268,6 +1422,12 @@ class TrainingUI:
         self.status_var.set("Training laeuft...")
         self._append_log(f"Starte Training: size={size}, version={version}, backend=gpu")
 
+        # Reset Plot
+        for key in self.history_data:
+            self.history_data[key] = []
+        self._setup_axes()
+        self.canvas.draw()
+
         thread = threading.Thread(target=self._worker, args=(size, version), daemon=True)
         thread.start()
         self.root.after(150, self._poll_events)
@@ -1288,7 +1448,7 @@ class TrainingUI:
                 callback=callback,
             )
             self.event_queue.put(("success", {"metadata": metadata}))
-        except Exception as exc:  # noqa: BLE001
+        except BaseException as exc:  # noqa: BLE001
             details = traceback.format_exc()
             self.event_queue.put(("error", {"message": str(exc), "traceback": details}))
 
@@ -1319,6 +1479,30 @@ class TrainingUI:
                 )
                 self._append_log(msg)
                 self.status_var.set(f"Epoch {epoch}/{epochs}")
+
+                # Update Plot
+                self.history_data["epochs"].append(epoch)
+                self.history_data["train_loss"].append(float(data["train_loss"]))
+                self.history_data["test_loss"].append(float(data["test_loss"]))
+                self.history_data["train_acc"].append(float(data["train_acc"]))
+                self.history_data["test_acc"].append(float(data["test_acc"]))
+
+                self.ax_loss.clear()
+                self.ax_loss.set_title("Loss")
+                self.ax_loss.plot(self.history_data["epochs"], self.history_data["train_loss"], "b-", label="Train")
+                self.ax_loss.plot(self.history_data["epochs"], self.history_data["test_loss"], "r-", label="Test")
+                self.ax_loss.legend(fontsize="small")
+                self.ax_loss.set_ylim(0, max(2.5, max(self.history_data["train_loss"]) * 1.1 if self.history_data["train_loss"] else 2.5))
+
+                self.ax_acc.clear()
+                self.ax_acc.set_title("Accuracy")
+                self.ax_acc.plot(self.history_data["epochs"], self.history_data["train_acc"], "b-", label="Train")
+                self.ax_acc.plot(self.history_data["epochs"], self.history_data["test_acc"], "r-", label="Test")
+                self.ax_acc.legend(fontsize="small", loc="lower right")
+                self.ax_acc.set_ylim(0, 1.05)
+
+                self.fig.tight_layout(pad=3.0)
+                self.canvas.draw()
             elif event == "success":
                 metadata = data.get("metadata", {})
                 final_metrics = metadata.get("final_metrics", {}) if isinstance(metadata, dict) else {}
