@@ -40,23 +40,21 @@ MODEL_PROFILES = {
         "hidden_layers": 2,
         "epochs": 96,
         "batch_size": 512,
-        "learning_rate": 0.0025,
     },
     "normal": {
         "hidden_size": 512,
         "hidden_layers": 2,
         "epochs": 192,
         "batch_size": 512,
-        "learning_rate": 0.0015,
     },
     "pro": {
         "hidden_size": 2048,
         "hidden_layers": 3,
         "epochs": 512,
         "batch_size": 512,
-        "learning_rate": 0.001,
     },
 }
+ADAM_LEARNING_RATE = 0.0015
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
@@ -66,6 +64,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-ui", action="store_true", help="Kein GUI, direkt im Terminal trainieren.")
     parser.add_argument("--size", choices=["mini", "normal", "pro"], default="normal")
     parser.add_argument("--version", type=str, default=None, help="Versionsnummer des Modells (z. B. 2 oder 2.1).")
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=15,
+        help="Stoppt, wenn sich die Test-Accuracy so viele Epochen nicht verbessert (0 = aus).",
+    )
     return parser.parse_args()
 
 
@@ -176,10 +180,17 @@ def save_model_json(metadata: dict[str, object], output_path: Path) -> None:
     output_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
 
-def train_model(size: str, version: str, callback: ProgressCallback | None = None) -> dict[str, object]:
+def train_model(
+    size: str,
+    version: str,
+    callback: ProgressCallback | None = None,
+    early_stopping_patience: int = 15,
+) -> dict[str, object]:
     if size not in MODEL_PROFILES:
         raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro.")
     version = validate_version(version)
+    if early_stopping_patience < 0:
+        raise ValueError("--early-stopping-patience muss >= 0 sein.")
 
     train_data_dir = TRAIN_DATA_DIR
     test_data_dir = TEST_DATA_DIR
@@ -194,7 +205,7 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
     hidden_layers = int(profile["hidden_layers"])
     epochs = int(profile["epochs"])
     batch_size = int(profile["batch_size"])
-    learning_rate = float(profile["learning_rate"])
+    learning_rate = ADAM_LEARNING_RATE
     seed = get_fixed_seed()
 
     model_name = build_model_name(version=version, size=size)
@@ -220,7 +231,8 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
         message=(
             "Training startet mit: "
             f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
-            f"batch_size={batch_size}, learning_rate={learning_rate}, seed={seed}"
+            f"batch_size={batch_size}, optimizer=adam, seed={seed}, "
+            f"early_stopping_patience={early_stopping_patience}"
         ),
     )
 
@@ -244,6 +256,11 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
 
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
     rng = np.random.default_rng(seed)
+    early_stopping_enabled = early_stopping_patience > 0
+    best_test_acc = float("-inf")
+    best_test_epoch = 0
+    epochs_without_improvement = 0
+    stopped_early = False
 
     _emit(callback, "start", epochs=epochs)
 
@@ -301,7 +318,37 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
             test_acc=test_acc,
         )
 
+        if should_eval_test and early_stopping_enabled:
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+                best_test_epoch = epoch
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+
+            if epochs_without_improvement >= early_stopping_patience:
+                stopped_early = True
+                _emit(
+                    callback,
+                    "info",
+                    message=(
+                        f"Early Stopping: keine Verbesserung der Test-Accuracy in "
+                        f"{early_stopping_patience} Epochen. Stoppe bei Epoch {epoch}."
+                    ),
+                )
+                break
+
     training_time_seconds = time.perf_counter() - start_time
+    epochs_trained = len(history["train_loss"])
+
+    if history["test_acc"]:
+        if best_test_epoch <= 0:
+            best_idx = int(np.argmax(np.asarray(history["test_acc"], dtype=np.float32)))
+            best_test_epoch = best_idx + 1
+            best_test_acc = float(history["test_acc"][best_idx])
+    else:
+        best_test_acc = 0.0
+        best_test_epoch = 0
 
     metadata: dict[str, object] = {
         "model_name": model_name,
@@ -312,12 +359,20 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
         "hidden_size": hidden_size,
         "hidden_layers": hidden_layers,
         "epochs": epochs,
+        "epochs_trained": epochs_trained,
         "batch_size": batch_size,
         "effective_batch_size": effective_batch_size,
         "test_eval_interval": test_eval_interval,
-        "learning_rate": learning_rate,
+        "optimizer": "adam",
         "seed": seed,
         "compute_backend": "cpu",
+        "early_stopping": {
+            "enabled": early_stopping_enabled,
+            "patience": int(early_stopping_patience),
+            "stopped_early": stopped_early,
+            "best_test_acc": float(best_test_acc),
+            "best_test_epoch": int(best_test_epoch),
+        },
         "samples": {"total": int(len(y_train) + len(y_test)), "train": int(len(y_train)), "test": int(len(y_test))},
         "final_metrics": {
             "train_loss": float(history["train_loss"][-1]),
@@ -351,7 +406,7 @@ def train_model(size: str, version: str, callback: ProgressCallback | None = Non
     return metadata
 
 
-def run_cli(size: str, version: str) -> None:
+def run_cli(size: str, version: str, early_stopping_patience: int) -> None:
     def callback(event: str, data: dict[str, Any]) -> None:
         if event == "progress":
             print(
@@ -362,7 +417,12 @@ def run_cli(size: str, version: str) -> None:
         elif event == "info":
             print(data["message"])
 
-    metadata = train_model(size=size, version=version, callback=callback)
+    metadata = train_model(
+        size=size,
+        version=version,
+        callback=callback,
+        early_stopping_patience=early_stopping_patience,
+    )
     final_acc = float((metadata.get("final_metrics", {}) or {}).get("test_acc", 0.0))
     print(f"Finale Test-Accuracy: {final_acc:.4f}")
 
@@ -442,7 +502,7 @@ class TrainingUI:
                 f"layers={int(profile['hidden_layers'])}, "
                 f"epochs={int(profile['epochs'])}, "
                 f"batch={int(profile['batch_size'])}, "
-                f"lr={float(profile['learning_rate'])}"
+                "optimizer=adam"
             )
         )
 
@@ -494,7 +554,7 @@ class TrainingUI:
             self.event_queue.put((event, data))
 
         try:
-            metadata = train_model(size=size, version=version, callback=callback)
+            metadata = train_model(size=size, version=version, callback=callback, early_stopping_patience=15)
             self.event_queue.put(("success", {"metadata": metadata}))
         except Exception as exc:  # noqa: BLE001
             details = traceback.format_exc()
@@ -593,7 +653,7 @@ def main() -> None:
     if args.no_ui:
         if args.version is None:
             raise SystemExit("Im --no-ui Modus ist --version Pflicht.")
-        run_cli(size=args.size, version=args.version)
+        run_cli(size=args.size, version=args.version, early_stopping_patience=args.early_stopping_patience)
         return
 
     run_ui()

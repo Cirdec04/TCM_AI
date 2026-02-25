@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
 from tkinter import messagebox, ttk
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import matplotlib.figure as mpl_fig
@@ -27,6 +27,20 @@ from PIL import Image
 
 cl = None
 cl_array = None
+
+if TYPE_CHECKING:
+    import pyopencl as _cl_types
+    import pyopencl.array as _cl_array_types
+
+    CLContext = _cl_types.Context
+    CLCommandQueue = _cl_types.CommandQueue
+    CLProgram = _cl_types.Program
+    CLArray = _cl_array_types.Array
+else:
+    CLContext = Any
+    CLCommandQueue = Any
+    CLProgram = Any
+    CLArray = Any
 
 
 def ensure_pyopencl() -> None:
@@ -57,23 +71,21 @@ MODEL_PROFILES = {
         "hidden_layers": 2,
         "epochs": 96,
         "batch_size": 512,
-        "learning_rate": 0.0025,
     },
     "normal": {
         "hidden_size": 512,
         "hidden_layers": 2,
         "epochs": 192,
         "batch_size": 512,
-        "learning_rate": 0.0015,
     },
     "pro": {
         "hidden_size": 2048,
         "hidden_layers": 3,
         "epochs": 512,
         "batch_size": 512,
-        "learning_rate": 0.001,
     },
 }
+ADAM_LEARNING_RATE = 0.0015
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
@@ -427,6 +439,12 @@ def parse_args() -> argparse.Namespace:
         help="Ueberschreibt die Batch-Size aus dem Profil (groesser = oft schneller auf GPU).",
     )
     parser.add_argument("--test-eval-interval", type=int, default=1, help="Test-Auswertung alle N Epochen.")
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=15,
+        help="Stoppt, wenn sich die Test-Accuracy so viele Epochen nicht verbessert (0 = aus).",
+    )
     parser.add_argument("--no-fast-math", action="store_true", help="Deaktiviert OpenCL fast math Build-Optionen.")
     parser.add_argument("--no-ui", action="store_true", help="Kein GUI, direkt im Terminal trainieren.")
     return parser.parse_args()
@@ -556,7 +574,7 @@ def create_opencl_context(
     platform_index: int | None,
     device_index: int | None,
     fast_math: bool,
-) -> tuple[cl.Context, cl.CommandQueue, cl.Program, OpenCLDeviceRef]:
+) -> tuple[CLContext, CLCommandQueue, CLProgram, OpenCLDeviceRef]:
     ensure_pyopencl()
     refs = enumerate_opencl_devices()
     selected = _pick_device(refs, platform_index=platform_index, device_index=device_index)
@@ -589,8 +607,8 @@ def create_opencl_context(
 class OpenCLMLPTrainer:
     def __init__(
         self,
-        queue: cl.CommandQueue,
-        program: cl.Program,
+        queue: CLCommandQueue,
+        program: CLProgram,
         layer_sizes: list[int],
         batch_size: int,
         seed: int,
@@ -607,10 +625,10 @@ class OpenCLMLPTrainer:
         self.local_1d = (256,)
 
         rng = np.random.default_rng(seed)
-        self.weights: list[cl_array.Array] = []
-        self.biases: list[cl_array.Array] = []
-        self.grad_weights: list[cl_array.Array] = []
-        self.grad_biases: list[cl_array.Array] = []
+        self.weights: list[CLArray] = []
+        self.biases: list[CLArray] = []
+        self.grad_weights: list[CLArray] = []
+        self.grad_biases: list[CLArray] = []
 
         for prev_size, next_size in zip(self.layer_sizes[:-1], self.layer_sizes[1:], strict=False):
             weight_np = rng.normal(0.0, np.sqrt(2.0 / prev_size), (prev_size, next_size)).astype(np.float32)
@@ -621,13 +639,13 @@ class OpenCLMLPTrainer:
             self.grad_biases.append(cl_array.empty(self.queue, bias_np.shape, dtype=np.float32))
 
         # Adam State
-        self.m_w: list[cl_array.Array] = [cl_array.zeros_like(w) for w in self.weights]
-        self.v_w: list[cl_array.Array] = [cl_array.zeros_like(w) for w in self.weights]
-        self.m_b: list[cl_array.Array] = [cl_array.zeros_like(b) for b in self.biases]
-        self.v_b: list[cl_array.Array] = [cl_array.zeros_like(b) for b in self.biases]
+        self.m_w: list[CLArray] = [cl_array.zeros_like(w) for w in self.weights]
+        self.v_w: list[CLArray] = [cl_array.zeros_like(w) for w in self.weights]
+        self.m_b: list[CLArray] = [cl_array.zeros_like(b) for b in self.biases]
+        self.v_b: list[CLArray] = [cl_array.zeros_like(b) for b in self.biases]
         self.t = 0
 
-        self.activations: list[cl_array.Array] = []
+        self.activations: list[CLArray] = []
         for size in self.layer_sizes[:-1]:
             self.activations.append(cl_array.empty(self.queue, (self.batch_size, size), dtype=np.float32))
         self.logits = cl_array.empty(self.queue, (self.batch_size, self.output_size), dtype=np.float32)
@@ -649,10 +667,10 @@ class OpenCLMLPTrainer:
 
     def _k_matmul_bias_relu(
         self,
-        a: cl_array.Array,
-        b: cl_array.Array,
-        bias: cl_array.Array,
-        out: cl_array.Array,
+        a: CLArray,
+        b: CLArray,
+        bias: CLArray,
+        out: CLArray,
         m: int,
         n: int,
         k: int,
@@ -675,9 +693,9 @@ class OpenCLMLPTrainer:
 
     def _k_matmul_at_b(
         self,
-        a: cl_array.Array,
-        b: cl_array.Array,
-        out: cl_array.Array,
+        a: CLArray,
+        b: CLArray,
+        out: CLArray,
         m: int,
         k: int,
         n: int,
@@ -697,9 +715,9 @@ class OpenCLMLPTrainer:
 
     def _k_matmul_a_bt(
         self,
-        a: cl_array.Array,
-        b: cl_array.Array,
-        out: cl_array.Array,
+        a: CLArray,
+        b: CLArray,
+        out: CLArray,
         m: int,
         n: int,
         k: int,
@@ -748,7 +766,7 @@ class OpenCLMLPTrainer:
             np.int32(self.output_size),
         )
 
-    def _k_reduce_sum_rows(self, a: cl_array.Array, out: cl_array.Array, m: int, n: int) -> None:
+    def _k_reduce_sum_rows(self, a: CLArray, out: CLArray, m: int, n: int) -> None:
         global_size = (_round_up(n, self.local_1d[0]),)
         self.program.reduce_sum_rows(
             self.queue,
@@ -760,7 +778,7 @@ class OpenCLMLPTrainer:
             np.int32(n),
         )
 
-    def _k_relu_backprop_inplace(self, da: cl_array.Array, activation: cl_array.Array, size: int) -> None:
+    def _k_relu_backprop_inplace(self, da: CLArray, activation: CLArray, size: int) -> None:
         global_size = (_round_up(size, self.local_1d[0]),)
         self.program.relu_backprop_inplace(
             self.queue,
@@ -771,7 +789,7 @@ class OpenCLMLPTrainer:
             np.int32(size),
         )
 
-    def _k_sgd_update(self, param: cl_array.Array, grad: cl_array.Array, learning_rate: np.float32, size: int) -> None:
+    def _k_sgd_update(self, param: CLArray, grad: CLArray, learning_rate: np.float32, size: int) -> None:
         global_size = (_round_up(size, self.local_1d[0]),)
         self.program.sgd_update(
             self.queue,
@@ -783,7 +801,7 @@ class OpenCLMLPTrainer:
             np.int32(size),
         )
 
-    def _k_adam_update(self, param: cl_array.Array, grad: cl_array.Array, m: cl_array.Array, v: cl_array.Array, lr: float, t: int) -> None:
+    def _k_adam_update(self, param: CLArray, grad: CLArray, m: CLArray, v: CLArray, lr: float, t: int) -> None:
         beta1, beta2, epsilon = 0.9, 0.999, 1e-8
         size = param.size
         global_size = (_round_up(size, self.local_1d[0]),)
@@ -806,9 +824,9 @@ class OpenCLMLPTrainer:
 
     def _k_gather_batch(
         self,
-        full_x: cl_array.Array,
-        full_y: cl_array.Array,
-        indices_gpu: cl_array.Array,
+        full_x: CLArray,
+        full_y: CLArray,
+        indices_gpu: CLArray,
         m: int,
     ) -> None:
         # Features gather
@@ -946,9 +964,9 @@ class OpenCLMLPTrainer:
 
     def train_batch_vram(
         self,
-        full_x_gpu: cl_array.Array,
-        full_y_gpu: cl_array.Array,
-        indices_gpu: cl_array.Array,
+        full_x_gpu: CLArray,
+        full_y_gpu: CLArray,
+        indices_gpu: CLArray,
         m: int,
         learning_rate: float,
     ) -> tuple[float, float]:
@@ -1041,7 +1059,7 @@ class OpenCLMLPTrainer:
             return 0.0, 0.0
         return total_loss / float(total_samples), total_correct / float(total_samples)
 
-    def evaluate_vram(self, x_eval_gpu: cl_array.Array, y_eval_gpu: cl_array.Array) -> tuple[float, float]:
+    def evaluate_vram(self, x_eval_gpu: CLArray, y_eval_gpu: CLArray) -> tuple[float, float]:
         total_loss = 0.0
         total_correct = 0
         total_samples = int(x_eval_gpu.shape[0])
@@ -1165,6 +1183,7 @@ def train_model_gpu(
     batch_size_override: int | None,
     test_eval_interval: int,
     fast_math: bool,
+    early_stopping_patience: int = 15,
     callback: ProgressCallback | None = None,
 ) -> dict[str, object]:
     if size not in MODEL_PROFILES:
@@ -1172,13 +1191,15 @@ def train_model_gpu(
     version = validate_version(version)
     if test_eval_interval <= 0:
         raise ValueError("--test-eval-interval muss >= 1 sein.")
+    if early_stopping_patience < 0:
+        raise ValueError("--early-stopping-patience muss >= 0 sein.")
 
     profile = MODEL_PROFILES[size]
     hidden_size = int(profile["hidden_size"])
     hidden_layers = int(profile["hidden_layers"])
     epochs = int(profile["epochs"])
     base_batch_size = int(profile["batch_size"])
-    learning_rate = float(profile["learning_rate"])
+    learning_rate = ADAM_LEARNING_RATE
     seed = get_fixed_seed()
 
     effective_batch_size = int(batch_size_override) if batch_size_override is not None else base_batch_size
@@ -1236,7 +1257,8 @@ def train_model_gpu(
             "Training startet mit: "
             f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
             f"batch_size={base_batch_size}, effective_batch_size={effective_batch_size}, "
-            f"learning_rate={learning_rate}, seed={seed}, fast_math={fast_math}"
+            f"optimizer=adam, seed={seed}, fast_math={fast_math}, "
+            f"early_stopping_patience={early_stopping_patience}"
         ),
     )
 
@@ -1244,6 +1266,11 @@ def train_model_gpu(
 
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
     rng = np.random.default_rng(seed)
+    early_stopping_enabled = early_stopping_patience > 0
+    best_test_acc = float("-inf")
+    best_test_epoch = 0
+    epochs_without_improvement = 0
+    stopped_early = False
     start_time = time.perf_counter()
 
     train_count = int(x_train.shape[0])
@@ -1309,7 +1336,38 @@ def train_model_gpu(
             test_acc=test_acc,
         )
 
+        if should_eval_test and early_stopping_enabled:
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+                best_test_epoch = epoch
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+
+            if epochs_without_improvement >= early_stopping_patience:
+                stopped_early = True
+                _emit(
+                    callback,
+                    "info",
+                    message=(
+                        f"Early Stopping: keine Verbesserung der Test-Accuracy in "
+                        f"{early_stopping_patience} Epochen. Stoppe bei Epoch {epoch}."
+                    ),
+                )
+                break
+
     training_time_seconds = float(time.perf_counter() - start_time)
+    epochs_trained = len(history["train_loss"])
+
+    if history["test_acc"]:
+        if best_test_epoch <= 0:
+            best_idx = int(np.argmax(np.asarray(history["test_acc"], dtype=np.float32)))
+            best_test_epoch = best_idx + 1
+            best_test_acc = float(history["test_acc"][best_idx])
+    else:
+        best_test_acc = 0.0
+        best_test_epoch = 0
+
     weights, biases = trainer.export_weights()
 
     metadata: dict[str, object] = {
@@ -1321,11 +1379,19 @@ def train_model_gpu(
         "hidden_size": hidden_size,
         "hidden_layers": hidden_layers,
         "epochs": epochs,
+        "epochs_trained": epochs_trained,
         "batch_size": base_batch_size,
         "effective_batch_size": effective_batch_size,
         "test_eval_interval": test_eval_interval,
-        "learning_rate": learning_rate,
+        "optimizer": "adam",
         "seed": seed,
+        "early_stopping": {
+            "enabled": early_stopping_enabled,
+            "patience": int(early_stopping_patience),
+            "stopped_early": stopped_early,
+            "best_test_acc": float(best_test_acc),
+            "best_test_epoch": int(best_test_epoch),
+        },
         "compute_backend": "opencl",
         "backend_info": {
             "platform_index": selected_device.platform_index,
@@ -1389,6 +1455,7 @@ def run_cli(args: argparse.Namespace) -> None:
         batch_size_override=args.batch_size_override,
         test_eval_interval=args.test_eval_interval,
         fast_math=not args.no_fast_math,
+        early_stopping_patience=args.early_stopping_patience,
         callback=callback,
     )
     final_acc = float((metadata.get("final_metrics", {}) or {}).get("test_acc", 0.0))
@@ -1470,7 +1537,7 @@ class TrainingUI:
                 f"layers={int(profile['hidden_layers'])}, "
                 f"epochs={int(profile['epochs'])}, "
                 f"batch={int(profile['batch_size'])}, "
-                f"lr={float(profile['learning_rate'])}"
+                "optimizer=adam"
             )
         )
 
@@ -1530,6 +1597,7 @@ class TrainingUI:
                 batch_size_override=None,
                 test_eval_interval=1,
                 fast_math=True,
+                early_stopping_patience=15,
                 callback=callback,
             )
             self.event_queue.put(("success", {"metadata": metadata}))
