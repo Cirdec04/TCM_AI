@@ -442,7 +442,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--early-stopping-patience",
         type=int,
-        default=15,
+        default=5,
         help="Stoppt, wenn sich die Test-Accuracy so viele Epochen nicht verbessert (0 = aus).",
     )
     parser.add_argument("--no-fast-math", action="store_true", help="Deaktiviert OpenCL fast math Build-Optionen.")
@@ -1198,7 +1198,8 @@ def train_model_gpu(
     batch_size_override: int | None,
     test_eval_interval: int,
     fast_math: bool,
-    early_stopping_patience: int = 15,
+    early_stopping_patience: int = 5,
+    stop_event: threading.Event | None = None,
     callback: ProgressCallback | None = None,
 ) -> dict[str, object]:
     if size not in MODEL_PROFILES:
@@ -1287,6 +1288,7 @@ def train_model_gpu(
     best_test_epoch = 0
     epochs_without_improvement = 0
     stopped_early = False
+    stopped_by_user = False
     start_time = time.perf_counter()
 
     train_count = int(x_train.shape[0])
@@ -1301,11 +1303,19 @@ def train_model_gpu(
     indices_gpu = cl_array.empty(queue, (effective_batch_size,), dtype=np.int32)
 
     for epoch in range(1, epochs + 1):
+        if stop_event is not None and stop_event.is_set():
+            stopped_by_user = True
+            break
+
         indices = rng.permutation(train_count).astype(np.int32)
         batch_losses: list[float] = []
         batch_accs: list[float] = []
 
         for batch_idx, start in enumerate(range(0, train_count, effective_batch_size), start=1):
+            if stop_event is not None and stop_event.is_set():
+                stopped_by_user = True
+                break
+
             end = min(start + effective_batch_size, train_count)
             m = end - start
             batch_indices = indices[start:end]
@@ -1325,6 +1335,9 @@ def train_model_gpu(
                     "info",
                     message=f"Epoch {epoch}/{epochs}: Batch {batch_idx}/{num_batches}",
                 )
+
+        if stopped_by_user:
+            break
 
         train_loss = float(np.mean(batch_losses)) if batch_losses else 0.0
         train_acc = float(np.mean(batch_accs)) if batch_accs else 0.0
@@ -1372,6 +1385,9 @@ def train_model_gpu(
                 )
                 break
 
+    if stopped_by_user:
+        _emit(callback, "info", message="Training manuell beendet (End Training Now).")
+
     training_time_seconds = float(time.perf_counter() - start_time)
     epochs_trained = len(history["train_loss"])
 
@@ -1385,6 +1401,21 @@ def train_model_gpu(
         best_test_epoch = 0
 
     weights, biases = trainer.export_weights()
+
+    if history["train_loss"] and history["test_loss"] and history["train_acc"] and history["test_acc"]:
+        final_metrics = {
+            "train_loss": float(history["train_loss"][-1]),
+            "train_acc": float(history["train_acc"][-1]),
+            "test_loss": float(history["test_loss"][-1]),
+            "test_acc": float(history["test_acc"][-1]),
+        }
+    else:
+        final_metrics = {
+            "train_loss": 0.0,
+            "train_acc": 0.0,
+            "test_loss": 0.0,
+            "test_acc": 0.0,
+        }
 
     metadata: dict[str, object] = {
         "model_name": model_name,
@@ -1412,6 +1443,7 @@ def train_model_gpu(
             "best_test_acc": float(best_test_acc),
             "best_test_epoch": int(best_test_epoch),
         },
+        "stopped_by_user": bool(stopped_by_user),
         "compute_backend": "opencl",
         "backend_info": {
             "platform_index": selected_device.platform_index,
@@ -1425,12 +1457,7 @@ def train_model_gpu(
             "fast_math": bool(fast_math),
         },
         "samples": {"total": int(len(y_train) + len(y_test)), "train": int(len(y_train)), "test": int(len(y_test))},
-        "final_metrics": {
-            "train_loss": float(history["train_loss"][-1]),
-            "train_acc": float(history["train_acc"][-1]),
-            "test_loss": float(history["test_loss"][-1]),
-            "test_acc": float(history["test_acc"][-1]),
-        },
+        "final_metrics": final_metrics,
         "training_time_seconds": training_time_seconds,
         "artifacts": {
             "model_file": str(model_path),
@@ -1490,6 +1517,7 @@ class TrainingUI:
 
         self.event_queue: Queue[tuple[str, dict[str, Any]]] = Queue()
         self.training_running = False
+        self.stop_training_event = threading.Event()
 
         self.size_var = tk.StringVar(value="normal")
         self.version_var = tk.StringVar(value="1")
@@ -1518,7 +1546,9 @@ class TrainingUI:
         self.profile_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
         self.start_btn = ttk.Button(frame, text="Training starten", command=self.start_training)
-        self.start_btn.grid(row=3, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.start_btn.grid(row=3, column=0, sticky="we", pady=(10, 0), padx=(0, 4))
+        self.stop_btn = ttk.Button(frame, text="End Training Now", command=self.stop_training, state="disabled")
+        self.stop_btn.grid(row=3, column=1, sticky="we", pady=(10, 0), padx=(4, 0))
 
         self.progress = ttk.Progressbar(frame, mode="determinate", length=360)
         self.progress.grid(row=4, column=0, columnspan=2, sticky="we", pady=(10, 0))
@@ -1584,7 +1614,9 @@ class TrainingUI:
             return
 
         self.training_running = True
+        self.stop_training_event.clear()
         self.start_btn.config(state="disabled")
+        self.stop_btn.config(state="normal")
         self.size_combo.config(state="disabled")
         self.version_entry.config(state="disabled")
 
@@ -1604,6 +1636,14 @@ class TrainingUI:
         thread.start()
         self.root.after(150, self._poll_events)
 
+    def stop_training(self) -> None:
+        if not self.training_running:
+            return
+        self.stop_training_event.set()
+        self.stop_btn.config(state="disabled")
+        self.status_var.set("Stop angefordert...")
+        self._append_log("Manueller Stopp angefordert (End Training Now). Warte auf sicheren Abbruch...")
+
     def _worker(self, size: str, version: str) -> None:
         def callback(event: str, data: dict[str, Any]) -> None:
             self.event_queue.put((event, data))
@@ -1617,7 +1657,8 @@ class TrainingUI:
                 batch_size_override=None,
                 test_eval_interval=1,
                 fast_math=True,
-                early_stopping_patience=15,
+                early_stopping_patience=5,
+                stop_event=self.stop_training_event,
                 callback=callback,
             )
             self.event_queue.put(("success", {"metadata": metadata}))
@@ -1679,11 +1720,15 @@ class TrainingUI:
             elif event == "success":
                 metadata = data.get("metadata", {})
                 final_metrics = metadata.get("final_metrics", {}) if isinstance(metadata, dict) else {}
+                stopped_by_user = bool(metadata.get("stopped_by_user", False)) if isinstance(metadata, dict) else False
                 final_acc = float(final_metrics.get("test_acc", 0.0))
                 self._append_log(f"Finale Test-Accuracy: {final_acc:.4f}")
-                self.status_var.set("Training abgeschlossen")
+                self.status_var.set("Training manuell beendet" if stopped_by_user else "Training abgeschlossen")
                 self._finish_training()
-                messagebox.showinfo("Fertig", f"Training abgeschlossen.\nFinale Test-Accuracy: {final_acc:.4f}")
+                if stopped_by_user:
+                    messagebox.showinfo("Beendet", f"Training manuell beendet.\nFinale Test-Accuracy: {final_acc:.4f}")
+                else:
+                    messagebox.showinfo("Fertig", f"Training abgeschlossen.\nFinale Test-Accuracy: {final_acc:.4f}")
                 keep_polling = False
             elif event == "error":
                 message = str(data.get("message", "Unbekannter Fehler"))
@@ -1702,6 +1747,7 @@ class TrainingUI:
     def _finish_training(self) -> None:
         self.training_running = False
         self.start_btn.config(state="normal")
+        self.stop_btn.config(state="disabled")
         self.size_combo.config(state="readonly")
         self.version_entry.config(state="normal")
 
