@@ -15,7 +15,7 @@ def resolve_compute_backend(requested_backend: str) -> tuple[str, str | None, An
     value = (requested_backend or "cpu").strip().lower()
     if value == "cpu":
         return "cpu", None, np, None, {"provider": "numpy", "runtime": "cpu"}
-    return "cpu", f"Backend '{requested_backend}' wird nicht unterstuetzt. Nutze CPU.", np, None, {
+    return "cpu", f"Backend '{requested_backend}' wird nicht unterstützt. Nutze CPU.", np, None, {
         "provider": "numpy",
         "runtime": "cpu",
     }

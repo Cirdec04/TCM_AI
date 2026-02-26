@@ -207,7 +207,7 @@ class DigitApp:
     def clear_canvas(self) -> None:
         self.grid.fill(0.0)
         self.canvas.itemconfig("pixel", fill="black")
-        self.result_var.set("Zeichnung geloescht. Zeichne eine Ziffer.")
+        self.result_var.set("Zeichnung gelöscht.")
         self.all_models_var.set("Zeichnung leer.")
 
     def _update_all_models_predictions(self, x_input: np.ndarray) -> None:
@@ -243,7 +243,7 @@ class DigitApp:
 
         x_input = self.grid.reshape(1, -1).astype(np.float32)
         if self.test_all_var.get():
-            self.result_var.set("Test all ist aktiv.\nEinzelmetriken vom ausgewaehlten Modell sind ausgeblendet.")
+            self.result_var.set("Test all ist aktiv.\nEinzelmetriken vom ausgewählten Modell sind ausgeblendet.")
             self._update_all_models_predictions(x_input)
             return
 

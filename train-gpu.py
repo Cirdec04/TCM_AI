@@ -429,14 +429,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GPU-Training (OpenCL) fuer TCM-AI.")
     parser.add_argument("--size", choices=["mini", "normal", "pro"], default="normal")
     parser.add_argument("--version", type=str, default=None, help="Versionsnummer des Modells (z. B. 4.1).")
-    parser.add_argument("--list-devices", action="store_true", help="Zeigt OpenCL Plattformen/Geraete und beendet.")
+    parser.add_argument("--list-devices", action="store_true", help="Zeigt OpenCL Plattformen/Geräte und beendet.")
     parser.add_argument("--platform-index", type=int, default=None, help="OpenCL Plattform-Index.")
     parser.add_argument("--device-index", type=int, default=None, help="OpenCL Geraete-Index innerhalb der Plattform.")
     parser.add_argument(
         "--batch-size-override",
         type=int,
         default=None,
-        help="Ueberschreibt die Batch-Size aus dem Profil (groesser = oft schneller auf GPU).",
+        help="Ueberschreibt die Batch-Size aus dem Profil (grösser = oft schneller auf GPU).",
     )
     parser.add_argument("--test-eval-interval", type=int, default=1, help="Test-Auswertung alle N Epochen.")
     parser.add_argument(
@@ -554,11 +554,11 @@ def enumerate_opencl_devices() -> list[OpenCLDeviceRef]:
 
 def _pick_device(refs: list[OpenCLDeviceRef], platform_index: int | None, device_index: int | None) -> OpenCLDeviceRef:
     if not refs:
-        raise RuntimeError("Keine OpenCL Geraete gefunden.")
+        raise RuntimeError("Keine OpenCL Geräte gefunden.")
 
     if platform_index is not None or device_index is not None:
         if platform_index is None or device_index is None:
-            raise ValueError("--platform-index und --device-index muessen zusammen gesetzt werden.")
+            raise ValueError("--platform-index und --device-index müssen zusammen gesetzt werden.")
         for ref in refs:
             if ref.platform_index == platform_index and ref.device_index == device_index:
                 return ref
@@ -1215,7 +1215,7 @@ def train_model_gpu(
     callback: ProgressCallback | None = None,
 ) -> dict[str, object]:
     if size not in MODEL_PROFILES:
-        raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro.")
+        raise ValueError("Ungültige Grösse. Erlaubt: mini, normal, pro.")
     version = validate_version(version)
     if test_eval_interval <= 0:
         raise ValueError("--test-eval-interval muss >= 1 sein.")
@@ -1232,7 +1232,7 @@ def train_model_gpu(
 
     effective_batch_size = int(batch_size_override) if batch_size_override is not None else base_batch_size
     if effective_batch_size <= 0:
-        raise ValueError("Batch-Size muss groesser als 0 sein.")
+        raise ValueError("Batch-Size muss grösser als 0 sein.")
 
     model_name = build_model_name(version=version, size=size)
     model_path = MODELS_DIR / f"{model_name}.npz"
@@ -1241,7 +1241,7 @@ def train_model_gpu(
 
     if model_path.exists() or metadata_path.exists() or plot_path.exists():
         raise FileExistsError(
-            f"Artefakt fuer '{model_name}' existiert bereits (.npz/.json/.png). Bitte andere Version waehlen."
+            f"Artefakt fuer '{model_name}' existiert bereits (.npz/.json/.png). Bitte andere Version wählen."
         )
 
     _emit(callback, "info", message="Initialisiere OpenCL und bereite Kernel vor...")
@@ -1637,7 +1637,7 @@ class TrainingUI:
         epochs = int(MODEL_PROFILES[size]["epochs"])
         self.progress["maximum"] = epochs
         self.progress["value"] = 0
-        self.status_var.set("Training laeuft...")
+        self.status_var.set("Training läuft...")
         self._append_log(f"Starte Training: size={size}, version={version}, backend=gpu")
 
         # Reset Plot
