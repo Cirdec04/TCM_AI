@@ -64,7 +64,7 @@ ProgressCallback = Callable[[str, dict[str, Any]], None]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Trainiere ein einfaches MLP fuer Ziffernerkennung.")
+    parser = argparse.ArgumentParser(description="Trainiere ein einfaches MLP für Ziffernerkennung.")
     parser.add_argument("--no-ui", action="store_true", help="Kein GUI, direkt im Terminal trainieren.")
     parser.add_argument("--size", choices=["mini", "normal", "pro"], default="normal")
     parser.add_argument("--version", type=str, default=None, help="Versionsnummer des Modells (z. B. 2 oder 2.1).")
@@ -359,7 +359,7 @@ def train_model(
 
     if model_path.exists() or metadata_path.exists() or plot_path.exists():
         raise FileExistsError(
-            f"Artefakt fuer '{model_name}' existiert bereits (.npz/.json/.png). Bitte andere Version waehlen."
+            f"Artefakt fuer '{model_name}' existiert bereits (.npz/.json/.png). Bitte andere Version waälen."
         )
 
     _emit(callback, "info", message=f"Lade Trainingsdaten aus: {train_data_dir}")
@@ -559,7 +559,7 @@ def train_model(
     except PermissionError as exc:
         raise PermissionError(
             "Kein Schreibzugriff auf den Ordner 'models' oder auf eine dort gesperrte Datei. "
-            "Bitte pruefe Dateirechte, schliesse geoeffnete Dateien (z. B. Plot/JSON), und nutze eine neue Version."
+            "Bitte prüfe Dateirechte, schliesse geöffnete Dateien (z. B. Plot/JSON), und nutze eine neue Version."
         ) from exc
 
     _emit(callback, "info", message="Training fertig.")
@@ -630,7 +630,7 @@ class TrainingUI:
         frame = ttk.Frame(self.root, padding=12)
         frame.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="Modellgroesse:").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, text="Modellgrösse:").grid(row=0, column=0, sticky="w")
         self.size_combo = ttk.Combobox(frame, textvariable=self.size_var, state="readonly", values=["mini", "normal", "pro"], width=12)
         self.size_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
         self.size_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_profile_label())
@@ -715,7 +715,7 @@ class TrainingUI:
 
         size = self.size_var.get().strip().lower()
         if size not in MODEL_PROFILES:
-            messagebox.showerror("Fehler", "Ungueltige Modellgroesse.")
+            messagebox.showerror("Fehler", "Ungültige Modellgrösse.")
             return
         learning_rate_raw = self.learning_rate_var.get().strip()
         try:
