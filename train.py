@@ -18,11 +18,11 @@ import matplotlib.figure as mpl_fig
 
 from deps import ensure_requirements_installed
 
-ensure_requirements_installed(required_modules=("numpy", "matplotlib", "PIL"))
+ensure_requirements_installed(required_modules=("numpy", "matplotlib"))
 
 import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 import numpy as np
-from PIL import Image
 
 from nn import SimpleMLP
 
@@ -80,6 +80,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Adam Learning Rate (Standard: mini/normal=0.0015, pro=0.0008).",
     )
+    parser.add_argument("--augment", action="store_true", help="Aktiviert Data Augmentation beim Training.")
+    parser.add_argument(
+        "--aug-prob",
+        type=float,
+        default=0.7,
+        help="Wahrscheinlichkeit pro Sample fuer Augmentation (0.0 bis 1.0).",
+    )
+    parser.add_argument("--aug-shift", type=int, default=2, help="Maximaler Pixel-Shift in x/y Richtung.")
+    parser.add_argument("--aug-rot", type=float, default=10.0, help="Maximaler Rotationswinkel in Grad.")
     return parser.parse_args()
 
 
@@ -88,14 +97,65 @@ def _emit(callback: ProgressCallback | None, event: str, **data: Any) -> None:
         callback(event, data)
 
 
-def _load_image_as_vector(path: Path) -> np.ndarray:
-    with Image.open(path) as image:
-        image = image.convert("L")
-        if image.size != (28, 28):
-            image = image.resize((28, 28))
-        pixels = np.asarray(image, dtype=np.float32)
+def _to_grayscale_unit(image: np.ndarray) -> np.ndarray:
+    if image.ndim == 2:
+        gray = image.astype(np.float32, copy=False)
+    elif image.ndim == 3:
+        channels = int(image.shape[2])
+        if channels >= 3:
+            rgb = image[..., :3].astype(np.float32, copy=False)
+            gray = (0.299 * rgb[..., 0]) + (0.587 * rgb[..., 1]) + (0.114 * rgb[..., 2])
+        else:
+            gray = image[..., 0].astype(np.float32, copy=False)
+    else:
+        raise ValueError(f"Ungueltige Bildform: {image.shape}")
 
-    pixels = pixels / 255.0
+    if gray.size == 0:
+        raise ValueError("Leeres Bild.")
+    if float(np.max(gray)) > 1.0:
+        gray = gray / 255.0
+    return np.clip(gray, 0.0, 1.0).astype(np.float32, copy=False)
+
+
+def _resize_nearest(image: np.ndarray, width: int = 28, height: int = 28) -> np.ndarray:
+    if image.shape == (height, width):
+        return image.astype(np.float32, copy=False)
+    src_h, src_w = int(image.shape[0]), int(image.shape[1])
+    y_idx = np.linspace(0, src_h - 1, height).astype(np.int32)
+    x_idx = np.linspace(0, src_w - 1, width).astype(np.int32)
+    return image[np.ix_(y_idx, x_idx)].astype(np.float32, copy=False)
+
+
+def _rotate_nearest_zero_fill(image: np.ndarray, angle_deg: float) -> np.ndarray:
+    if angle_deg == 0.0:
+        return image
+    h, w = image.shape
+    cy = (h - 1) * 0.5
+    cx = (w - 1) * 0.5
+    theta = np.deg2rad(angle_deg)
+    c = float(np.cos(theta))
+    s = float(np.sin(theta))
+
+    yy, xx = np.indices((h, w), dtype=np.float32)
+    x0 = xx - cx
+    y0 = yy - cy
+
+    src_x = (c * x0) + (s * y0) + cx
+    src_y = (-s * x0) + (c * y0) + cy
+
+    src_x_i = np.rint(src_x).astype(np.int32)
+    src_y_i = np.rint(src_y).astype(np.int32)
+
+    valid = (src_x_i >= 0) & (src_x_i < w) & (src_y_i >= 0) & (src_y_i < h)
+    out = np.zeros_like(image, dtype=np.float32)
+    out[valid] = image[src_y_i[valid], src_x_i[valid]]
+    return out
+
+
+def _load_image_as_vector(path: Path) -> np.ndarray:
+    pixels_raw = mpimg.imread(path)
+    pixels = _to_grayscale_unit(np.asarray(pixels_raw))
+    pixels = _resize_nearest(pixels, width=28, height=28)
     return pixels.reshape(-1)
 
 
@@ -105,8 +165,6 @@ def load_dataset_from_folders(
     dataset_label: str = "Daten",
     progress_every: int = 500,
 ) -> tuple[np.ndarray, np.ndarray]:
-    features: list[np.ndarray] = []
-    labels: list[int] = []
     files_with_labels: list[tuple[int, Path]] = []
 
     for class_label in range(10):
@@ -121,16 +179,64 @@ def load_dataset_from_folders(
     total_files = len(files_with_labels)
     _emit(callback, "info", message=f"{dataset_label}: {total_files} Dateien gefunden.")
 
-    for index, (digit_label, file_path) in enumerate(files_with_labels, start=1):
-        features.append(_load_image_as_vector(file_path))
-        labels.append(digit_label)
+    if total_files == 0:
+        raise ValueError(f"{dataset_label}: Keine Bilddateien gefunden in {data_dir}")
 
+    x = np.empty((total_files, 28 * 28), dtype=np.float32)
+    y = np.empty((total_files,), dtype=np.int64)
+
+    for index, (digit_label, file_path) in enumerate(files_with_labels, start=1):
+        x[index - 1] = _load_image_as_vector(file_path)
+        y[index - 1] = digit_label
         if index == 1 or index % progress_every == 0 or index == total_files:
             _emit(callback, "info", message=f"{dataset_label}: {index}/{total_files} geladen.")
 
-    x = np.vstack(features).astype(np.float32)
-    y = np.array(labels, dtype=np.int64)
     return x, y
+
+
+def _shift_zero_fill(image: np.ndarray, dx: int, dy: int) -> np.ndarray:
+    shifted = np.zeros_like(image)
+    src_x0 = max(0, -dx)
+    src_x1 = min(28, 28 - dx)
+    src_y0 = max(0, -dy)
+    src_y1 = min(28, 28 - dy)
+    dst_x0 = src_x0 + dx
+    dst_x1 = src_x1 + dx
+    dst_y0 = src_y0 + dy
+    dst_y1 = src_y1 + dy
+    shifted[dst_y0:dst_y1, dst_x0:dst_x1] = image[src_y0:src_y1, src_x0:src_x1]
+    return shifted
+
+
+def augment_batch(
+    x_batch: np.ndarray,
+    rng: np.random.Generator,
+    probability: float = 0.7,
+    max_shift: int = 2,
+    max_rotation: float = 10.0,
+) -> np.ndarray:
+    out = np.array(x_batch, dtype=np.float32, copy=True)
+    if out.ndim != 2 or out.shape[1] != 28 * 28:
+        raise ValueError("augment_batch erwartet Shape (batch, 784).")
+
+    for sample_idx in range(out.shape[0]):
+        if rng.random() > probability:
+            continue
+
+        image = out[sample_idx].reshape(28, 28)
+
+        if max_shift > 0:
+            dx = int(rng.integers(-max_shift, max_shift + 1))
+            dy = int(rng.integers(-max_shift, max_shift + 1))
+            image = _shift_zero_fill(image, dx=dx, dy=dy)
+
+        if max_rotation > 0:
+            angle = float(rng.uniform(-max_rotation, max_rotation))
+            image = _rotate_nearest_zero_fill(image, angle_deg=angle)
+
+        out[sample_idx] = image.reshape(-1)
+
+    return out
 
 
 def validate_version(version: str) -> str:
@@ -211,6 +317,10 @@ def train_model(
     callback: ProgressCallback | None = None,
     early_stopping_patience: int = 15,
     learning_rate_override: float | None = None,
+    augment_enabled: bool = False,
+    aug_prob: float = 0.7,
+    aug_shift: int = 2,
+    aug_rot: float = 10.0,
 ) -> dict[str, object]:
     if size not in MODEL_PROFILES:
         raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro.")
@@ -219,6 +329,12 @@ def train_model(
         raise ValueError("--early-stopping-patience muss >= 0 sein.")
     if learning_rate_override is not None and learning_rate_override <= 0:
         raise ValueError("--learning-rate muss > 0 sein.")
+    if not 0.0 <= aug_prob <= 1.0:
+        raise ValueError("--aug-prob muss zwischen 0.0 und 1.0 liegen.")
+    if aug_shift < 0:
+        raise ValueError("--aug-shift muss >= 0 sein.")
+    if aug_rot < 0:
+        raise ValueError("--aug-rot muss >= 0 sein.")
 
     train_data_dir = TRAIN_DATA_DIR
     test_data_dir = TEST_DATA_DIR
@@ -260,7 +376,8 @@ def train_model(
             "Training startet mit: "
             f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
             f"batch_size={batch_size}, optimizer=adam, learning_rate={learning_rate}, seed={seed}, "
-            f"early_stopping_patience={early_stopping_patience}"
+            f"early_stopping_patience={early_stopping_patience}, "
+            f"augmentation={augment_enabled} (prob={aug_prob}, shift={aug_shift}, rot={aug_rot})"
         ),
     )
 
@@ -274,8 +391,6 @@ def train_model(
     _emit(callback, "info", message="Aktives Backend: CPU")
 
     xp = model.xp
-    x_train_backend = model.asarray(x_train, dtype=xp.float32)
-    y_train_backend = model.asarray(y_train, dtype=xp.int64)
     x_test_backend = model.asarray(x_test, dtype=xp.float32)
     y_test_backend = model.asarray(y_test, dtype=xp.int64)
 
@@ -295,24 +410,32 @@ def train_model(
     _emit(callback, "start", epochs=epochs)
 
     start_time = time.perf_counter()
+    num_samples = int(x_train.shape[0])
+    num_batches = (num_samples + effective_batch_size - 1) // effective_batch_size
+    progress_every = max(1, num_batches // 4)
+
     for epoch in range(1, epochs + 1):
-        indices = np.arange(x_train.shape[0])
-        rng.shuffle(indices)
-        x_train_shuffled = x_train_backend[indices]
-        y_train_shuffled = y_train_backend[indices]
+        indices = rng.permutation(num_samples)
 
         batch_losses: list[float] = []
         batch_accs: list[float] = []
 
-        num_samples = int(x_train_shuffled.shape[0])
-        num_batches = (num_samples + effective_batch_size - 1) // effective_batch_size
-        progress_every = max(1, num_batches // 4)
-
         for batch_idx, start in enumerate(range(0, num_samples, effective_batch_size), start=1):
             end = start + effective_batch_size
-            x_batch = x_train_shuffled[start:end]
-            y_batch = y_train_shuffled[start:end]
-            y_batch_one_hot = model.one_hot_labels(y_batch, num_classes=10)
+            batch_indices = indices[start:end]
+            x_batch_np = x_train[batch_indices]
+            y_batch = y_train[batch_indices]
+            if augment_enabled:
+                x_batch_np = augment_batch(
+                    x_batch_np,
+                    rng=rng,
+                    probability=float(aug_prob),
+                    max_shift=int(aug_shift),
+                    max_rotation=float(aug_rot),
+                )
+            x_batch = model.asarray(x_batch_np, dtype=xp.float32)
+            y_batch_backend = model.asarray(y_batch, dtype=xp.int64)
+            y_batch_one_hot = model.one_hot_labels(y_batch_backend, num_classes=10)
             batch_loss, batch_acc = model.train_batch(x_batch, y_batch_one_hot, learning_rate)
             batch_losses.append(batch_loss)
             batch_accs.append(batch_acc)
@@ -401,6 +524,12 @@ def train_model(
         },
         "seed": seed,
         "compute_backend": "cpu",
+        "augmentation": {
+            "enabled": bool(augment_enabled),
+            "probability": float(aug_prob),
+            "max_shift": int(aug_shift),
+            "max_rotation": float(aug_rot),
+        },
         "early_stopping": {
             "enabled": early_stopping_enabled,
             "patience": int(early_stopping_patience),
@@ -441,7 +570,16 @@ def train_model(
     return metadata
 
 
-def run_cli(size: str, version: str, early_stopping_patience: int, learning_rate: float | None) -> None:
+def run_cli(
+    size: str,
+    version: str,
+    early_stopping_patience: int,
+    learning_rate: float | None,
+    augment_enabled: bool,
+    aug_prob: float,
+    aug_shift: int,
+    aug_rot: float,
+) -> None:
     def callback(event: str, data: dict[str, Any]) -> None:
         if event == "progress":
             print(
@@ -458,6 +596,10 @@ def run_cli(size: str, version: str, early_stopping_patience: int, learning_rate
         callback=callback,
         early_stopping_patience=early_stopping_patience,
         learning_rate_override=learning_rate,
+        augment_enabled=augment_enabled,
+        aug_prob=aug_prob,
+        aug_shift=aug_shift,
+        aug_rot=aug_rot,
     )
     final_acc = float((metadata.get("final_metrics", {}) or {}).get("test_acc", 0.0))
     print(f"Finale Test-Accuracy: {final_acc:.4f}")
@@ -475,6 +617,7 @@ class TrainingUI:
         self.size_var = tk.StringVar(value="normal")
         self.version_var = tk.StringVar(value="1")
         self.learning_rate_var = tk.StringVar(value="")
+        self.augment_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Bereit")
 
         # Live-Plot Daten
@@ -500,17 +643,20 @@ class TrainingUI:
         self.learning_rate_entry = ttk.Entry(frame, textvariable=self.learning_rate_var, width=14)
         self.learning_rate_entry.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
 
+        self.augment_check = ttk.Checkbutton(frame, text="Data Augmentation", variable=self.augment_var)
+        self.augment_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
         self.profile_label = ttk.Label(frame, text="", justify="left")
-        self.profile_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.profile_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
         self.start_btn = ttk.Button(frame, text="Training starten", command=self.start_training)
-        self.start_btn.grid(row=4, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.start_btn.grid(row=5, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
         self.progress = ttk.Progressbar(frame, mode="determinate", length=360)
-        self.progress.grid(row=5, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.progress.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
         self.log_text = tk.Text(frame, width=70, height=8, state="disabled")
-        self.log_text.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.log_text.grid(row=8, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
         # Live Plot Bereich
         self.fig = mpl_fig.Figure(figsize=(7, 3), dpi=100)
@@ -522,7 +668,7 @@ class TrainingUI:
 
         self.canvas = FigureCanvasTkAgg(self.fig, master=frame)
         self.canvas_widget = self.canvas.get_tk_widget()
-        self.canvas_widget.grid(row=8, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.canvas_widget.grid(row=9, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
     def _setup_axes(self) -> None:
         self.ax_loss.clear()
@@ -586,12 +732,17 @@ class TrainingUI:
         self.size_combo.config(state="disabled")
         self.version_entry.config(state="disabled")
         self.learning_rate_entry.config(state="disabled")
+        self.augment_check.config(state="disabled")
 
         epochs = int(MODEL_PROFILES[size]["epochs"])
         self.progress["maximum"] = epochs
         self.progress["value"] = 0
         self.status_var.set("Training laeuft...")
-        self._append_log(f"Starte Training: size={size}, version={version}, lr={learning_rate}, backend=cpu")
+        augment_enabled = bool(self.augment_var.get())
+        self._append_log(
+            f"Starte Training: size={size}, version={version}, lr={learning_rate}, "
+            f"augment={augment_enabled}, backend=cpu"
+        )
 
         # Reset Plot
         for key in self.history_data:
@@ -599,11 +750,15 @@ class TrainingUI:
         self._setup_axes()
         self.canvas.draw()
 
-        thread = threading.Thread(target=self._worker, args=(size, version, learning_rate), daemon=True)
+        thread = threading.Thread(
+            target=self._worker,
+            args=(size, version, learning_rate, augment_enabled),
+            daemon=True,
+        )
         thread.start()
         self.root.after(150, self._poll_events)
 
-    def _worker(self, size: str, version: str, learning_rate: float) -> None:
+    def _worker(self, size: str, version: str, learning_rate: float, augment_enabled: bool) -> None:
         def callback(event: str, data: dict[str, Any]) -> None:
             self.event_queue.put((event, data))
 
@@ -614,6 +769,7 @@ class TrainingUI:
                 callback=callback,
                 early_stopping_patience=15,
                 learning_rate_override=learning_rate,
+                augment_enabled=augment_enabled,
             )
             self.event_queue.put(("success", {"metadata": metadata}))
         except Exception as exc:  # noqa: BLE001
@@ -700,6 +856,7 @@ class TrainingUI:
         self.size_combo.config(state="readonly")
         self.version_entry.config(state="normal")
         self.learning_rate_entry.config(state="normal")
+        self.augment_check.config(state="normal")
 
 
 def run_ui() -> None:
@@ -719,6 +876,10 @@ def main() -> None:
             version=args.version,
             early_stopping_patience=args.early_stopping_patience,
             learning_rate=args.learning_rate,
+            augment_enabled=args.augment,
+            aug_prob=args.aug_prob,
+            aug_shift=args.aug_shift,
+            aug_rot=args.aug_rot,
         )
         return
 

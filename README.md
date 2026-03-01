@@ -138,7 +138,7 @@ Notiz zu `TCM-o4.1`:
 ### Familie `TCM-o5` (Mega Dataset & Adam Optimizer)
 
 - Daten: Kombiniertes Set aus MNIST Full + EMNIST Digits (~300'000 Train / 50'000 Test).
-- �nderung gg�. `TCM-o4`: 
+- Änderung ggü. `TCM-o4`: 
   - **Adam Optimizer**: Wechsel vom einfachen SGD auf den Adam-Optimizer.
   - **Live-Graphen w�hrend dem trainieren**: Echtzeit-Visualisierung von Loss und Accuracy w�hrend dem trainieren.
   - Early Stopping mit patience 5
@@ -148,9 +148,15 @@ Notiz zu `TCM-o4.1`:
 | `TCM-o5-mini` | 300'000 / 50'000   | 256    | 2 | 269.3K | 11     | 512   | Adam | 0.9881 |
 | `TCM-o5`      | 300'000 / 50'000   | 512    | 2 | 669.7K | 19     | 512   | Adam | 0.9902 |
 | `TCM-o5-pro`  | 300'000 / 50'000   | 2048   | 3 | 10.02M | 18     | 512   | Adam | 0.9901 |
+| `TCM-o5.1-mini` | 300'000 / 50'000 | 256    | 2 | 269.3K | 44     | 512   | Adam | 0.9936 |
+| `TCM-o5.1`      | 300'000 / 50'000 | 512    | 2 | 669.7K | 40     | 512   | Adam | 0.9938 |
+| `TCM-o5.1-pro`  | 300'000 / 50'000 | 2048   | 3 | 10.02M | 22     | 512   | Adam | 0.9937 |
 
 Notiz zu `TCM-o5-pro`:
 Benchmark zeigt es schlechter an als es sich anfühlt. Beim ausprobieren war es merkbar besser als o5.
 
 Notiz zu `TCM-o5-Familie`:
 Alle Modelle werden manuell noch getestet und die o5-Familie erkennt extrem viel mehr als alle vorderen. dies liegt vermutlich vor allem am grösseren Trainingsdatensatz.
+
+Notiz zu `TCM-o5.1-Familie`:
+Data Augmentation eingebaut.

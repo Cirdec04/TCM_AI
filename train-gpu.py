@@ -14,16 +14,15 @@ from queue import Empty, Queue
 from tkinter import messagebox, ttk
 from typing import TYPE_CHECKING, Any, Callable
 
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.figure as mpl_fig
-
 from deps import ensure_requirements_installed
 
-ensure_requirements_installed(required_modules=("numpy", "matplotlib", "PIL"))
+ensure_requirements_installed(required_modules=("numpy", "matplotlib"))
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
 import numpy as np
-from PIL import Image
 
 cl = None
 cl_array = None
@@ -409,6 +408,128 @@ __kernel void gather_labels(
         out_batch[i] = full_labels[src_idx];
     }
 }
+
+__kernel void copy_float_buffer(
+    __global const float* src,
+    __global float* dst,
+    const int size
+){
+    const int idx = get_global_id(0);
+    if (idx < size) {
+        dst[idx] = src[idx];
+    }
+}
+
+uint xorshift32(uint x) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return x;
+}
+
+float u01_from_uint(uint x) {
+    return (float)(x & 0x00FFFFFFU) / 16777216.0f;
+}
+
+__kernel void make_aug_params(
+    __global const int* indices,
+    __global float* angles,
+    __global int* shift_x,
+    __global int* shift_y,
+    __global float* apply_mask,
+    const int M,
+    const uint seed,
+    const uint epoch_idx,
+    const uint batch_idx,
+    const float prob,
+    const int max_shift,
+    const float max_angle_rad
+){
+    const int i = get_global_id(0);
+    if (i >= M) {
+        return;
+    }
+
+    uint state = (uint)indices[i];
+    state ^= seed * 747796405U;
+    state ^= (epoch_idx + 1U) * 2891336453U;
+    state ^= (batch_idx + 1U) * 1181783497U;
+    state ^= (uint)i * 277803737U;
+
+    state = xorshift32(state);
+    const float u_mask = u01_from_uint(state);
+    apply_mask[i] = (u_mask <= prob) ? 1.0f : 0.0f;
+
+    state = xorshift32(state ^ 0x9E3779B9U);
+    if (max_shift > 0) {
+        const int span = (2 * max_shift) + 1;
+        shift_x[i] = (int)(state % (uint)span) - max_shift;
+    } else {
+        shift_x[i] = 0;
+    }
+
+    state = xorshift32(state ^ 0x85EBCA6BU);
+    if (max_shift > 0) {
+        const int span = (2 * max_shift) + 1;
+        shift_y[i] = (int)(state % (uint)span) - max_shift;
+    } else {
+        shift_y[i] = 0;
+    }
+
+    state = xorshift32(state ^ 0xC2B2AE35U);
+    const float u_angle = u01_from_uint(state);
+    angles[i] = ((u_angle * 2.0f) - 1.0f) * max_angle_rad;
+}
+
+__kernel void augment_affine_nearest(
+    __global const float* input_batch,
+    __global float* output_batch,
+    __global const float* angles,
+    __global const int* shift_x,
+    __global const int* shift_y,
+    __global const float* apply_mask,
+    const int M,
+    const int width,
+    const int height
+){
+    const int pix = get_global_id(0);
+    const int sample = get_global_id(1);
+    const int image_size = width * height;
+    if (sample >= M || pix >= image_size) {
+        return;
+    }
+
+    const int base = sample * image_size;
+    if (apply_mask[sample] < 0.5f) {
+        output_batch[base + pix] = input_batch[base + pix];
+        return;
+    }
+
+    const int x = pix % width;
+    const int y = pix / width;
+    const float cx = ((float)width - 1.0f) * 0.5f;
+    const float cy = ((float)height - 1.0f) * 0.5f;
+
+    const float x_shifted = (float)x - (float)shift_x[sample];
+    const float y_shifted = (float)y - (float)shift_y[sample];
+    const float xr = x_shifted - cx;
+    const float yr = y_shifted - cy;
+
+    const float angle = angles[sample];
+    const float c = cos(angle);
+    const float s = sin(angle);
+
+    const float src_xf = c * xr + s * yr + cx;
+    const float src_yf = -s * xr + c * yr + cy;
+    const int src_x = (int)floor(src_xf + 0.5f);
+    const int src_y = (int)floor(src_yf + 0.5f);
+
+    float value = 0.0f;
+    if (src_x >= 0 && src_x < width && src_y >= 0 && src_y < height) {
+        value = input_batch[base + src_y * width + src_x];
+    }
+    output_batch[base + pix] = value;
+}
 """
 
 
@@ -445,6 +566,15 @@ def parse_args() -> argparse.Namespace:
         default=5,
         help="Stoppt, wenn sich die Test-Accuracy so viele Epochen nicht verbessert (0 = aus).",
     )
+    parser.add_argument("--augment", action="store_true", help="Aktiviert Data Augmentation beim Training.")
+    parser.add_argument(
+        "--aug-prob",
+        type=float,
+        default=0.7,
+        help="Wahrscheinlichkeit pro Sample fuer Augmentation (0.0 bis 1.0).",
+    )
+    parser.add_argument("--aug-shift", type=int, default=2, help="Maximaler Pixel-Shift in x/y Richtung.")
+    parser.add_argument("--aug-rot", type=float, default=10.0, help="Maximaler Rotationswinkel in Grad.")
     parser.add_argument("--no-fast-math", action="store_true", help="Deaktiviert OpenCL fast math Build-Optionen.")
     parser.add_argument("--no-ui", action="store_true", help="Kein GUI, direkt im Terminal trainieren.")
     return parser.parse_args()
@@ -456,13 +586,65 @@ def _round_up(value: int, multiple: int) -> int:
     return ((value + multiple - 1) // multiple) * multiple
 
 
+def _to_grayscale_unit(image: np.ndarray) -> np.ndarray:
+    if image.ndim == 2:
+        gray = image.astype(np.float32, copy=False)
+    elif image.ndim == 3:
+        channels = int(image.shape[2])
+        if channels >= 3:
+            rgb = image[..., :3].astype(np.float32, copy=False)
+            gray = (0.299 * rgb[..., 0]) + (0.587 * rgb[..., 1]) + (0.114 * rgb[..., 2])
+        else:
+            gray = image[..., 0].astype(np.float32, copy=False)
+    else:
+        raise ValueError(f"Ungueltige Bildform: {image.shape}")
+
+    if gray.size == 0:
+        raise ValueError("Leeres Bild.")
+    if float(np.max(gray)) > 1.0:
+        gray = gray / 255.0
+    return np.clip(gray, 0.0, 1.0).astype(np.float32, copy=False)
+
+
+def _resize_nearest(image: np.ndarray, width: int = 28, height: int = 28) -> np.ndarray:
+    if image.shape == (height, width):
+        return image.astype(np.float32, copy=False)
+    src_h, src_w = int(image.shape[0]), int(image.shape[1])
+    y_idx = np.linspace(0, src_h - 1, height).astype(np.int32)
+    x_idx = np.linspace(0, src_w - 1, width).astype(np.int32)
+    return image[np.ix_(y_idx, x_idx)].astype(np.float32, copy=False)
+
+
+def _rotate_nearest_zero_fill(image: np.ndarray, angle_deg: float) -> np.ndarray:
+    if angle_deg == 0.0:
+        return image
+    h, w = image.shape
+    cy = (h - 1) * 0.5
+    cx = (w - 1) * 0.5
+    theta = np.deg2rad(angle_deg)
+    c = float(np.cos(theta))
+    s = float(np.sin(theta))
+
+    yy, xx = np.indices((h, w), dtype=np.float32)
+    x0 = xx - cx
+    y0 = yy - cy
+
+    src_x = (c * x0) + (s * y0) + cx
+    src_y = (-s * x0) + (c * y0) + cy
+
+    src_x_i = np.rint(src_x).astype(np.int32)
+    src_y_i = np.rint(src_y).astype(np.int32)
+
+    valid = (src_x_i >= 0) & (src_x_i < w) & (src_y_i >= 0) & (src_y_i < h)
+    out = np.zeros_like(image, dtype=np.float32)
+    out[valid] = image[src_y_i[valid], src_x_i[valid]]
+    return out
+
+
 def _load_image_as_vector(path: Path) -> np.ndarray:
-    with Image.open(path) as image:
-        image = image.convert("L")
-        if image.size != (28, 28):
-            image = image.resize((28, 28))
-        pixels = np.asarray(image, dtype=np.float32)
-    pixels = pixels / 255.0
+    pixels_raw = mpimg.imread(path)
+    pixels = _to_grayscale_unit(np.asarray(pixels_raw))
+    pixels = _resize_nearest(pixels, width=28, height=28)
     return pixels.reshape(-1)
 
 
@@ -495,6 +677,49 @@ def load_dataset_from_folders(
     x = np.vstack(features).astype(np.float32)
     y = np.array(labels, dtype=np.int32)
     return x, y
+
+
+def _shift_zero_fill(image: np.ndarray, dx: int, dy: int) -> np.ndarray:
+    shifted = np.zeros_like(image)
+    src_x0 = max(0, -dx)
+    src_x1 = min(28, 28 - dx)
+    src_y0 = max(0, -dy)
+    src_y1 = min(28, 28 - dy)
+    dst_x0 = src_x0 + dx
+    dst_x1 = src_x1 + dx
+    dst_y0 = src_y0 + dy
+    dst_y1 = src_y1 + dy
+    shifted[dst_y0:dst_y1, dst_x0:dst_x1] = image[src_y0:src_y1, src_x0:src_x1]
+    return shifted
+
+
+def augment_batch(
+    x_batch: np.ndarray,
+    rng: np.random.Generator,
+    probability: float = 0.7,
+    max_shift: int = 2,
+    max_rotation: float = 10.0,
+) -> np.ndarray:
+    out = np.array(x_batch, dtype=np.float32, copy=True)
+    if out.ndim != 2 or out.shape[1] != 28 * 28:
+        raise ValueError("augment_batch erwartet Shape (batch, 784).")
+
+    for sample_idx in range(out.shape[0]):
+        if rng.random() > probability:
+            continue
+
+        image = out[sample_idx].reshape(28, 28)
+        if max_shift > 0:
+            dx = int(rng.integers(-max_shift, max_shift + 1))
+            dy = int(rng.integers(-max_shift, max_shift + 1))
+            image = _shift_zero_fill(image, dx=dx, dy=dy)
+
+        if max_rotation > 0:
+            angle = float(rng.uniform(-max_rotation, max_rotation))
+            image = _rotate_nearest_zero_fill(image, angle_deg=angle)
+
+        out[sample_idx] = image.reshape(-1)
+    return out
 
 
 def validate_version(version: str) -> str:
@@ -642,6 +867,9 @@ class OpenCLMLPTrainer:
         self.k_adam_update = cl.Kernel(self.program, "adam_update")
         self.k_gather_features = cl.Kernel(self.program, "gather_features")
         self.k_gather_labels = cl.Kernel(self.program, "gather_labels")
+        self.k_copy_float_buffer = cl.Kernel(self.program, "copy_float_buffer")
+        self.k_make_aug_params = cl.Kernel(self.program, "make_aug_params")
+        self.k_augment_affine_nearest = cl.Kernel(self.program, "augment_affine_nearest")
         self.layer_sizes = [int(v) for v in layer_sizes]
         self.batch_size = int(batch_size)
         self.num_layers = len(self.layer_sizes) - 1
@@ -688,6 +916,12 @@ class OpenCLMLPTrainer:
         self.labels = cl_array.empty(self.queue, (self.batch_size,), dtype=np.int32)
         self.sample_loss = cl_array.empty(self.queue, (self.batch_size,), dtype=np.float32)
         self.sample_correct = cl_array.empty(self.queue, (self.batch_size,), dtype=np.int32)
+
+        self.aug_input = cl_array.empty(self.queue, (self.batch_size, self.layer_sizes[0]), dtype=np.float32)
+        self.aug_angles = cl_array.empty(self.queue, (self.batch_size,), dtype=np.float32)
+        self.aug_shift_x = cl_array.empty(self.queue, (self.batch_size,), dtype=np.int32)
+        self.aug_shift_y = cl_array.empty(self.queue, (self.batch_size,), dtype=np.int32)
+        self.aug_mask = cl_array.empty(self.queue, (self.batch_size,), dtype=np.float32)
 
         self.host_loss = np.empty((self.batch_size,), dtype=np.float32)
         self.host_correct = np.empty((self.batch_size,), dtype=np.int32)
@@ -883,6 +1117,68 @@ class OpenCLMLPTrainer:
             np.int32(m),
         )
 
+    def _k_augment_affine_nearest(self, m: int) -> None:
+        width = 28
+        height = 28
+        image_size = width * height
+        global_size = (_round_up(image_size, 16), _round_up(m, 16))
+        local_size = (16, 16)
+        self.k_augment_affine_nearest(
+            self.queue,
+            global_size,
+            local_size,
+            self.aug_input.data,
+            self.activations[0].data,
+            self.aug_angles.data,
+            self.aug_shift_x.data,
+            self.aug_shift_y.data,
+            self.aug_mask.data,
+            np.int32(m),
+            np.int32(width),
+            np.int32(height),
+        )
+
+    def _k_copy_float_buffer(self, src: CLArray, dst: CLArray, size: int) -> None:
+        global_size = (_round_up(size, self.local_1d[0]),)
+        self.k_copy_float_buffer(
+            self.queue,
+            global_size,
+            self.local_1d,
+            src.data,
+            dst.data,
+            np.int32(size),
+        )
+
+    def _k_make_aug_params(
+        self,
+        indices_gpu: CLArray,
+        m: int,
+        seed: int,
+        epoch_idx: int,
+        batch_idx: int,
+        prob: float,
+        max_shift: int,
+        max_angle_rad: float,
+    ) -> None:
+        global_size = (_round_up(m, self.local_1d[0]),)
+        self.k_make_aug_params(
+            self.queue,
+            global_size,
+            self.local_1d,
+            indices_gpu.data,
+            self.aug_angles.data,
+            self.aug_shift_x.data,
+            self.aug_shift_y.data,
+            self.aug_mask.data,
+            np.int32(m),
+            np.uint32(seed),
+            np.uint32(epoch_idx),
+            np.uint32(batch_idx),
+            np.float32(prob),
+            np.int32(max_shift),
+            np.float32(max_angle_rad),
+        )
+
     def _forward(self, m: int) -> None:
         for layer_idx in range(self.hidden_layers):
             prev_size = self.layer_sizes[layer_idx]
@@ -996,11 +1292,15 @@ class OpenCLMLPTrainer:
         indices_gpu: CLArray,
         m: int,
         learning_rate: float,
+        use_gpu_augment: bool = False,
     ) -> tuple[float, float]:
         if m <= 0:
             return 0.0, 0.0
 
         self._k_gather_batch(full_x_gpu, full_y_gpu, indices_gpu, m)
+        if use_gpu_augment:
+            self._k_copy_float_buffer(self.activations[0], self.aug_input, m * self.layer_sizes[0])
+            self._k_augment_affine_nearest(m)
         self._forward(m)
         self._k_softmax_xent(m)
 
@@ -1211,6 +1511,10 @@ def train_model_gpu(
     test_eval_interval: int,
     fast_math: bool,
     early_stopping_patience: int = 5,
+    augment_enabled: bool = False,
+    aug_prob: float = 0.7,
+    aug_shift: int = 2,
+    aug_rot: float = 10.0,
     stop_event: threading.Event | None = None,
     callback: ProgressCallback | None = None,
 ) -> dict[str, object]:
@@ -1221,6 +1525,12 @@ def train_model_gpu(
         raise ValueError("--test-eval-interval muss >= 1 sein.")
     if early_stopping_patience < 0:
         raise ValueError("--early-stopping-patience muss >= 0 sein.")
+    if not 0.0 <= aug_prob <= 1.0:
+        raise ValueError("--aug-prob muss zwischen 0.0 und 1.0 liegen.")
+    if aug_shift < 0:
+        raise ValueError("--aug-shift muss >= 0 sein.")
+    if aug_rot < 0:
+        raise ValueError("--aug-rot muss >= 0 sein.")
 
     profile = MODEL_PROFILES[size]
     hidden_size = int(profile["hidden_size"])
@@ -1287,7 +1597,8 @@ def train_model_gpu(
             f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
             f"batch_size={base_batch_size}, effective_batch_size={effective_batch_size}, "
             f"optimizer=adam, seed={seed}, fast_math={fast_math}, "
-            f"early_stopping_patience={early_stopping_patience}"
+            f"early_stopping_patience={early_stopping_patience}, "
+            f"augmentation={augment_enabled} (prob={aug_prob}, shift={aug_shift}, rot={aug_rot})"
         ),
     )
 
@@ -1308,11 +1619,13 @@ def train_model_gpu(
     progress_every = max(1, num_batches // 4)
 
     _emit(callback, "info", message="Übertrage vollständigen Datensatz in den VRAM...")
+    if augment_enabled:
+        _emit(callback, "info", message="Augmentation aktiv: GPU-Kernel (Shift/Rotation) im VRAM-Trainingspfad.")
     x_train_gpu = cl_array.to_device(queue, x_train)
     y_train_gpu = cl_array.to_device(queue, y_train.astype(np.int32))
+    indices_gpu = cl_array.empty(queue, (effective_batch_size,), dtype=np.int32)
     x_test_gpu = cl_array.to_device(queue, x_test)
     y_test_gpu = cl_array.to_device(queue, y_test.astype(np.int32))
-    indices_gpu = cl_array.empty(queue, (effective_batch_size,), dtype=np.int32)
 
     for epoch in range(1, epochs + 1):
         if stop_event is not None and stop_event.is_set():
@@ -1331,13 +1644,37 @@ def train_model_gpu(
             end = min(start + effective_batch_size, train_count)
             m = end - start
             batch_indices = indices[start:end]
-            
+
             # Nur die Indizes zur GPU schicken (kleiner Overhead)
             indices_gpu[:m].set(batch_indices, queue=queue)
-
-            batch_loss, batch_acc = trainer.train_batch_vram(
-                x_train_gpu, y_train_gpu, indices_gpu, m, learning_rate=learning_rate
-            )
+            if augment_enabled:
+                trainer._k_make_aug_params(
+                    indices_gpu=indices_gpu,
+                    m=m,
+                    seed=seed,
+                    epoch_idx=epoch - 1,
+                    batch_idx=batch_idx - 1,
+                    prob=float(aug_prob),
+                    max_shift=int(aug_shift),
+                    max_angle_rad=float(np.deg2rad(float(aug_rot))),
+                )
+                batch_loss, batch_acc = trainer.train_batch_vram(
+                    x_train_gpu,
+                    y_train_gpu,
+                    indices_gpu,
+                    m,
+                    learning_rate=learning_rate,
+                    use_gpu_augment=True,
+                )
+            else:
+                batch_loss, batch_acc = trainer.train_batch_vram(
+                    x_train_gpu,
+                    y_train_gpu,
+                    indices_gpu,
+                    m,
+                    learning_rate=learning_rate,
+                    use_gpu_augment=False,
+                )
             batch_losses.append(batch_loss)
             batch_accs.append(batch_acc)
 
@@ -1448,6 +1785,12 @@ def train_model_gpu(
             "human": format_parameter_count(parameter_total),
         },
         "seed": seed,
+        "augmentation": {
+            "enabled": bool(augment_enabled),
+            "probability": float(aug_prob),
+            "max_shift": int(aug_shift),
+            "max_rotation": float(aug_rot),
+        },
         "early_stopping": {
             "enabled": early_stopping_enabled,
             "patience": int(early_stopping_patience),
@@ -1515,6 +1858,10 @@ def run_cli(args: argparse.Namespace) -> None:
         test_eval_interval=args.test_eval_interval,
         fast_math=not args.no_fast_math,
         early_stopping_patience=args.early_stopping_patience,
+        augment_enabled=args.augment,
+        aug_prob=args.aug_prob,
+        aug_shift=args.aug_shift,
+        aug_rot=args.aug_rot,
         callback=callback,
     )
     final_acc = float((metadata.get("final_metrics", {}) or {}).get("test_acc", 0.0))
@@ -1535,10 +1882,13 @@ class TrainingUI:
 
         self.size_var = tk.StringVar(value="normal")
         self.version_var = tk.StringVar(value="1")
+        self.augment_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Bereit")
-
-        # Live-Plot Daten
-        self.history_data = {"epochs": [], "train_loss": [], "test_loss": [], "train_acc": [], "test_acc": []}
+        self.live_epoch_var = tk.StringVar(value="-")
+        self.live_train_loss_var = tk.StringVar(value="-")
+        self.live_train_acc_var = tk.StringVar(value="-")
+        self.live_test_loss_var = tk.StringVar(value="-")
+        self.live_test_acc_var = tk.StringVar(value="-")
 
         self._build_ui()
         self._refresh_profile_label()
@@ -1556,42 +1906,35 @@ class TrainingUI:
         self.version_entry = ttk.Entry(frame, textvariable=self.version_var, width=14)
         self.version_entry.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
 
+        self.augment_check = ttk.Checkbutton(frame, text="Data Augmentation", variable=self.augment_var)
+        self.augment_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
         self.profile_label = ttk.Label(frame, text="", justify="left")
-        self.profile_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.profile_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
         self.start_btn = ttk.Button(frame, text="Training starten", command=self.start_training)
-        self.start_btn.grid(row=3, column=0, sticky="we", pady=(10, 0), padx=(0, 4))
+        self.start_btn.grid(row=4, column=0, sticky="we", pady=(10, 0), padx=(0, 4))
         self.stop_btn = ttk.Button(frame, text="End Training Now", command=self.stop_training, state="disabled")
-        self.stop_btn.grid(row=3, column=1, sticky="we", pady=(10, 0), padx=(4, 0))
+        self.stop_btn.grid(row=4, column=1, sticky="we", pady=(10, 0), padx=(4, 0))
 
         self.progress = ttk.Progressbar(frame, mode="determinate", length=360)
-        self.progress.grid(row=4, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.progress.grid(row=5, column=0, columnspan=2, sticky="we", pady=(10, 0))
+
+        metrics_frame = ttk.LabelFrame(frame, text="Live Metriken", padding=8)
+        metrics_frame.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        ttk.Label(metrics_frame, text="Epoch:").grid(row=0, column=0, sticky="w")
+        ttk.Label(metrics_frame, textvariable=self.live_epoch_var).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metrics_frame, text="Train Loss:").grid(row=1, column=0, sticky="w")
+        ttk.Label(metrics_frame, textvariable=self.live_train_loss_var).grid(row=1, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metrics_frame, text="Train Acc:").grid(row=2, column=0, sticky="w")
+        ttk.Label(metrics_frame, textvariable=self.live_train_acc_var).grid(row=2, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metrics_frame, text="Test Loss:").grid(row=3, column=0, sticky="w")
+        ttk.Label(metrics_frame, textvariable=self.live_test_loss_var).grid(row=3, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metrics_frame, text="Test Acc:").grid(row=4, column=0, sticky="w")
+        ttk.Label(metrics_frame, textvariable=self.live_test_acc_var).grid(row=4, column=1, sticky="w", padx=(8, 0))
 
         self.log_text = tk.Text(frame, width=70, height=8, state="disabled")
-        self.log_text.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
-
-        # Live Plot Bereich
-        self.fig = mpl_fig.Figure(figsize=(7, 3), dpi=100)
-        self.ax_loss = self.fig.add_subplot(1, 2, 1)
-        self.ax_acc = self.fig.add_subplot(1, 2, 2)
-        self.fig.tight_layout(pad=3.0)
-
-        self._setup_axes()
-
-        self.canvas = FigureCanvasTkAgg(self.fig, master=frame)
-        self.canvas_widget = self.canvas.get_tk_widget()
-        self.canvas_widget.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10, 0))
-
-    def _setup_axes(self) -> None:
-        self.ax_loss.clear()
-        self.ax_loss.set_title("Loss")
-        self.ax_loss.set_xlabel("Epoch")
-        self.ax_loss.set_ylim(0, 2.5)
-
-        self.ax_acc.clear()
-        self.ax_acc.set_title("Accuracy")
-        self.ax_acc.set_xlabel("Epoch")
-        self.ax_acc.set_ylim(0, 1.0)
+        self.log_text.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
     def _refresh_profile_label(self) -> None:
         profile = MODEL_PROFILES[self.size_var.get()]
@@ -1633,20 +1976,23 @@ class TrainingUI:
         self.stop_btn.config(state="normal")
         self.size_combo.config(state="disabled")
         self.version_entry.config(state="disabled")
+        self.augment_check.config(state="disabled")
 
         epochs = int(MODEL_PROFILES[size]["epochs"])
         self.progress["maximum"] = epochs
         self.progress["value"] = 0
         self.status_var.set("Training laeuft...")
-        self._append_log(f"Starte Training: size={size}, version={version}, backend=gpu")
+        augment_enabled = bool(self.augment_var.get())
+        self._append_log(
+            f"Starte Training: size={size}, version={version}, augment={augment_enabled}, backend=gpu"
+        )
+        self.live_epoch_var.set("-")
+        self.live_train_loss_var.set("-")
+        self.live_train_acc_var.set("-")
+        self.live_test_loss_var.set("-")
+        self.live_test_acc_var.set("-")
 
-        # Reset Plot
-        for key in self.history_data:
-            self.history_data[key] = []
-        self._setup_axes()
-        self.canvas.draw()
-
-        self.worker_thread = threading.Thread(target=self._worker, args=(size, version), daemon=False)
+        self.worker_thread = threading.Thread(target=self._worker, args=(size, version, augment_enabled), daemon=False)
         self.worker_thread.start()
         self.root.after(150, self._poll_events)
 
@@ -1677,7 +2023,7 @@ class TrainingUI:
         self.status_var.set("Stop angefordert...")
         self._append_log("Manueller Stopp angefordert (End Training Now). Warte auf sicheren Abbruch...")
 
-    def _worker(self, size: str, version: str) -> None:
+    def _worker(self, size: str, version: str, augment_enabled: bool) -> None:
         def callback(event: str, data: dict[str, Any]) -> None:
             self.event_queue.put((event, data))
 
@@ -1691,6 +2037,7 @@ class TrainingUI:
                 test_eval_interval=1,
                 fast_math=True,
                 early_stopping_patience=5,
+                augment_enabled=augment_enabled,
                 stop_event=self.stop_training_event,
                 callback=callback,
             )
@@ -1718,38 +2065,23 @@ class TrainingUI:
             elif event == "progress":
                 epoch = int(data.get("epoch", 0))
                 epochs = int(data.get("epochs", 1))
+                train_loss = float(data["train_loss"])
+                train_acc = float(data["train_acc"])
+                test_loss = float(data["test_loss"])
+                test_acc = float(data["test_acc"])
                 self.progress["value"] = epoch
                 msg = (
                     f"Epoch {epoch:02d}/{epochs} | "
-                    f"Train Loss: {float(data['train_loss']):.4f} | Train Acc: {float(data['train_acc']):.4f} | "
-                    f"Test Loss: {float(data['test_loss']):.4f} | Test Acc: {float(data['test_acc']):.4f}"
+                    f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
+                    f"Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f}"
                 )
                 self._append_log(msg)
                 self.status_var.set(f"Epoch {epoch}/{epochs}")
-
-                # Update Plot
-                self.history_data["epochs"].append(epoch)
-                self.history_data["train_loss"].append(float(data["train_loss"]))
-                self.history_data["test_loss"].append(float(data["test_loss"]))
-                self.history_data["train_acc"].append(float(data["train_acc"]))
-                self.history_data["test_acc"].append(float(data["test_acc"]))
-
-                self.ax_loss.clear()
-                self.ax_loss.set_title("Loss")
-                self.ax_loss.plot(self.history_data["epochs"], self.history_data["train_loss"], "b-", label="Train")
-                self.ax_loss.plot(self.history_data["epochs"], self.history_data["test_loss"], "r-", label="Test")
-                self.ax_loss.legend(fontsize="small")
-                self.ax_loss.set_ylim(0, max(2.5, max(self.history_data["train_loss"]) * 1.1 if self.history_data["train_loss"] else 2.5))
-
-                self.ax_acc.clear()
-                self.ax_acc.set_title("Accuracy")
-                self.ax_acc.plot(self.history_data["epochs"], self.history_data["train_acc"], "b-", label="Train")
-                self.ax_acc.plot(self.history_data["epochs"], self.history_data["test_acc"], "r-", label="Test")
-                self.ax_acc.legend(fontsize="small", loc="lower right")
-                self.ax_acc.set_ylim(0, 1.05)
-
-                self.fig.tight_layout(pad=3.0)
-                self.canvas.draw()
+                self.live_epoch_var.set(f"{epoch}/{epochs}")
+                self.live_train_loss_var.set(f"{train_loss:.4f}")
+                self.live_train_acc_var.set(f"{train_acc:.4f}")
+                self.live_test_loss_var.set(f"{test_loss:.4f}")
+                self.live_test_acc_var.set(f"{test_acc:.4f}")
             elif event == "success":
                 metadata = data.get("metadata", {})
                 final_metrics = metadata.get("final_metrics", {}) if isinstance(metadata, dict) else {}
@@ -1783,6 +2115,7 @@ class TrainingUI:
         self.stop_btn.config(state="disabled")
         self.size_combo.config(state="readonly")
         self.version_entry.config(state="normal")
+        self.augment_check.config(state="normal")
         if self.worker_thread is not None and not self.worker_thread.is_alive():
             self.worker_thread = None
 
