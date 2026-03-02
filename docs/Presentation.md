@@ -1,129 +1,123 @@
-# Präsentation (KI-Vorlage) – TCM-AI Ziffernerkennung (5–10 Minuten)
+# Pr�sentation - TCM-AI Ziffernerkennung (10 Minuten, 3 Personen)
 
-Ziel: Diese Vorlage ist so geschrieben, dass ihr sie einer KI geben könnt, damit sie daraus eine **PowerPoint** baut (mit Folien + Speaker Notes). Wichtige Daten/Charts kommen aus `docs/tcm_accuracy.xlsx`.
+Ziel: Diese Vorlage ist so geschrieben, dass ihr sie einer KI geben k�nnt, damit sie daraus eine **PowerPoint** baut (Folien + Speaker Notes). Inhaltlich basiert sie auf `README.md` und `docs/TCM-AI_Dokumentation.docx`.
 
-## Vorgaben für die KI (PPT-Erstellung)
+## Vorgaben f�r die PPT
 
 - Sprache: Deutsch
-- Dauer: 5–10 Minuten
-- Stil: klar, technisch korrekt, nicht zu textlastig
+- Dauer: **10 Minuten**
+- Team: **3 Personen**
+- Stil: klar, technisch korrekt, wenig Text, visuell
 - Pro Folie: max. 5 Bulletpoints
-- Dazu Speaker Notes: 2–4 Sätze pro Folie
-- Einbauen: 1 Folie mit Excel-Tabelle/Chart aus `docs/tcm_accuracy.xlsx`
-- Kernaussage: „**Größe ist nicht alles**“ (mehr Parameter ≠ automatisch bessere Accuracy)
+- Speaker Notes: 2-4 S�tze
+- Pflicht: 1 Folie mit Tabelle/Chart aus `docs/tcm_accuracy.xlsx`
+- Kernaussagen:
+  - selbst implementiertes NN (ohne ML-Frameworks)
+  - Datenentwicklung von Start bis jetzt
+  - "Gr��e ist nicht alles"
 
-## Folie 1 — Titel
+## Zeit- und Rollenplan (10:00)
 
-**Titel:** Ziffernerkennung mit einem selbst implementierten neuronalen Netz (MLP)  
-**Untertitel:** TCM-AI – MNIST / Reduced MNIST  
-**Footer:** Team, Klasse, Datum
+- **Person 1 (0:00-3:20):** Folien 1-3
+- **Person 2 (3:20-6:40):** Folien 4-6
+- **Person 3 (6:40-10:00):** Folien 7-9
 
-**Speaker Notes:**  
-Kurz vorstellen: Wir haben ein neuronales Netz ohne ML-Frameworks gebaut und trainiert, das handgeschriebene Ziffern erkennt.
+---
 
-## Folie 2 — Problem & Ziel
+## Folie 1 - Titel & Ziel (Person 1)
 
-- Input: 28×28 Graustufenbild
-- Output: Ziffer 0–9
-- Ziel: hohe Test-Accuracy
-- Einschränkung: kein TensorFlow/PyTorch/Keras/scikit-learn
+**Titel:** TCM-AI: Handschriftliche Ziffernerkennung mit eigenem neuronalen Netz  
+**Untertitel:** Von Reduced MNIST zu 300k+ Samples  
+**Footer:** Tim, Mika, Cedric | EFIN26g | M�rz 2026
 
-**Speaker Notes:**  
-Erklären, was Klassifikation ist und warum ein train/test Split wichtig ist.
+**Speaker Notes:**
+Kurz vorstellen: Ziel war eine komplette Eigenimplementierung eines MLPs f�r Ziffern (0-9), ohne TensorFlow/PyTorch/Keras/scikit-learn.
 
-## Folie 3 — Daten & Vorverarbeitung
+## Folie 2 - Problem, Einschr�nkungen, Besonderheiten (Person 1)
 
-- Datenstruktur: `data/training/0..9`, `data/testing/0..9`
-- Graustufen, Resize 28×28
-- Normalisierung auf `[0,1]`
-- Flatten → 784 Features
+- Input: 28x28 Graustufenbild (784 Features)
+- Output: Klasse 0-9
+- Kein fertiges ML-Framework erlaubt
+- Alles selbst umgesetzt: Forward, Backprop, Training, Speicherung
 
-**Speaker Notes:**  
-Betonen, dass saubere Vorverarbeitung und eine feste Struktur die Reproduzierbarkeit erhöht.
+**Speaker Notes:**
+Hier die "speziellen Sachen": Wir haben nicht nur ein Modell trainiert, sondern den gesamten Lernprozess technisch selbst gebaut und nachvollziehbar gemacht.
 
-## Folie 4 — Künstliches Neuron (Basics)
+## Folie 3 - Datens�tze: Start vs. Jetzt (Person 1)
 
-- Formel: `z = w·x + b`
-- Aktivierung: `a = f(z)`
-- Hidden: ReLU
-- Output: Softmax → Wahrscheinlichkeiten
+- **Start (o1/o2):** Reduced MNIST, ca. 10k Train / 2k Test
+- **Zwischenschritt (o3/o4):** MNIST Full, 60k Train / 10k Test
+- **Jetzt (o5/o5.1):** MNIST + EMNIST kombiniert, ca. 300k Train / 50k Test
+- Ergebnis: deutlich bessere Generalisierung
 
-**Speaker Notes:**  
-Kurz: Ohne Aktivierungsfunktion wäre es nur linear; Softmax macht aus Scores echte Wahrscheinlichkeiten.
+**Speaker Notes:**
+Diese Folie ist zentral: Nicht nur Architektur, sondern vor allem Datenmenge und Datenvielfalt haben den gr��ten Qualit�tssprung gebracht.
 
-## Folie 5 — Unser Modell (MLP)
+## Folie 4 - Modellarchitektur & Profile (Person 2)
 
-- Fully-Connected Layers
-- 784 → Hidden → 10
-- Profile: mini / normal / pro (Speed vs. Accuracy)
-- Mehr Layers/Neuronen = mehr Parameter
+- MLP mit Fully Connected Layers
+- Profile: mini / normal / pro
+- 1 bis 3 Hidden Layers je nach Generation
+- Parameterbereich: ~100k bis ~10M
 
-**Speaker Notes:**  
-Einfach erklären: MLP kann komplexere Muster lernen als ein einzelnes Neuron.
+**Speaker Notes:**
+Erkl�rt, warum ihr Modellprofile nutzt: gleiche Idee, aber unterschiedliche Trade-offs bei Geschwindigkeit, Trainingsdauer und Accuracy.
 
-## Folie 6 — Training (Was passiert pro Batch?)
+## Folie 5 - Training & spezielle Technik (Person 2)
 
-- Forward Pass → `p`
+- Forward Pass -> Softmax
 - Loss: Cross-Entropy
-- Backpropagation → Gradienten
-- Update: Adam Optimizer
+- Backpropagation + Mini-Batches
+- Optimierer-Wechsel: von SGD zu Adam (ab o4.1/o5)
 
-**Speaker Notes:**  
-Trainingsprozess „nachvollziehbar“ erklären: Wir berechnen Fehler, leiten ihn rückwärts ab und passen Gewichte an.
+**Speaker Notes:**
+Der Wechsel auf Adam war ein wichtiger technischer Schritt: stabilere und schnellere Konvergenz, besonders bei gr��eren Modellen und Datens�tzen.
 
-## Folie 7 — Visualisierung / Monitoring
+## Folie 6 - Weitere Specials im Projekt (Person 2)
 
-- Train/Test Loss
-- Train/Test Accuracy
-- Plots werden gespeichert (`models/*_training.png`)
-- Nutzt Plots zum Erkennen von Over-/Underfitting
+- GPU-Training mit `train-gpu.py` (OpenCL)
+- Training-Monitoring (`*_training.png`)
+- Early Stopping in sp�teren Generationen
+- Data Augmentation ab o5.1
 
-**Speaker Notes:**  
-Beispiel erklären: Wenn Train-Accuracy steigt, Test aber fällt → Overfitting-Verdacht.
+**Speaker Notes:**
+Das sind eure "speziellen Sachen" neben der reinen Architektur: Engineering-Entscheidungen, die messbar bessere Resultate gebracht haben.
 
-## Folie 8 — Ergebnisse aus Excel (Pflichtfolie)
+## Folie 7 - Ergebnisse aus Excel (Pflichtfolie) (Person 3)
 
-**Inhalt dieser Folie (aus `docs/tcm_accuracy.xlsx`):**
+**Inhalt aus `docs/tcm_accuracy.xlsx`:**
 
-- Tabelle oder Chart: Modelle vs. Test-Accuracy
-- Zusätzlich: Parameteranzahl oder „Modellgröße“ (mini/normal/pro)
+- Tabelle/Chart: Modellfamilien und Test-Accuracy
+- Vergleich mini/normal/pro je Generation
+- Optional zweite Achse: Parameterzahl
 
-**Speaker Notes:**  
-Sagt, woher die Zahlen kommen (eigene Runs) und dass ihr bewusst Testwerte vergleicht.
+**Speaker Notes:**
+Nur Testmetriken vergleichen und kurz sagen, dass alle Zahlen aus euren eigenen Trainingsl�ufen stammen.
 
-## Folie 9 — „Größe ist nicht alles“ (Kernaussage)
+## Folie 8 - Kernaussage: "Gr��e ist nicht alles" (Person 3)
 
-- Größere Netze ≠ automatisch bessere Test-Accuracy
-- Gründe (je nach euren Daten):
-  - Overfitting
-  - Hyperparameter nicht optimal
-  - zu wenig/zu wenig diverse Daten
-  - Trainingstabilität/Plateaus
+- Gr��eres Modell != automatisch besser
+- Wichtiger sind: Datenqualit�t, Datenvielfalt, Optimierer, Hyperparameter
+- Beispiel aus euren Runs: pro oft nur knapp besser oder �hnlich
+- o5.1 zeigt: Setup + Daten schl�gt reine Modellgr��e
 
-**Speaker Notes:**  
-Bezieht euch direkt auf Folie 8: zeigt ein Beispiel, wo ein kleineres Modell ähnlich gut oder besser ist. Fazit: Architektur + Daten + Training müssen zusammenpassen.
+**Speaker Notes:**
+Bezieht euch direkt auf Folie 7 und nennt 1-2 konkrete Vergleichswerte aus Excel.
 
-## Folie 10 — Demo (optional, wenn Zeit)
+## Folie 9 - Fazit & Abschluss (Person 3)
 
-- `python app.py`
-- Ziffer zeichnen
-- Vorhersage + Wahrscheinlichkeiten anzeigen
+- Endstand: bis ~99% Test-Accuracy
+- Gr��te Fortschritte durch Datens�tze + Adam + sauberes Training
+- Praktischer Beweis: App-Demo (`app.py`) bei Bedarf
+- Takeaway: Verst�ndnis von NN von Grund auf aufgebaut
 
-**Speaker Notes:**  
-Kurz live zeigen, dass das Modell im Alltag „greifbar“ ist. Wenn keine Zeit: Screenshot/kurzer Ablauf.
+**Speaker Notes:**
+Kurz, pr�zise Abschlussbotschaft. Wenn Zeit �brig bleibt: 30-60 Sek. Live-Demo oder Screenshot.
 
-## Folie 11 — Learnings & Fazit
+---
 
-- Wichtigste Learnings (3–4 Punkte)
-- Was wir verbessert haben (z. B. Adam, mehr Daten, mehr Layers)
-- Nächste Schritte (z. B. bessere Augmentation/Regularisierung)
+## Materialliste f�r die KI (PPT-Generator)
 
-**Speaker Notes:**  
-Mit einem Satz abschließen: Wir verstehen jetzt, wie Neuronen, Training und Evaluation zusammenspielen.
-
-## Materialliste für die KI (damit sie die PPT baut)
-
-- `docs/tcm_accuracy.xlsx` (Zahlen + ggf. Chart übernehmen)
-- 1–2 Trainingsplots aus `models/*_training.png` (als Bilder einfügen)
-- Optional: Screenshot der App (`app.py`) für die Demo-Folie
-
+- `docs/tcm_accuracy.xlsx` (Ergebnisfolie)
+- 1-2 Trainingsplots aus `models/*_training.png`
+- optional Screenshot aus `app.py`
