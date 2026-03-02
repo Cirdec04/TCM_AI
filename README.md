@@ -9,7 +9,7 @@
 ## Projektstruktur
 
 - `data/`
-  - Enth�lt zwei Unterordner: `training/` und `testing/`.
+  - Enthält zwei Unterordner: `training/` und `testing/`.
   - Beide Unterordner haben jeweils die Unterordner `0` bis `9`.
   - In jedem Ziffernordner liegen die Bilddateien.
 - `models/`
@@ -19,45 +19,45 @@
     - `<size-tag>` ist optional:
       - kein Tag = `normal`
       - `-mini` = kleines/schnelles Modell
-      - `-pro` = gr�sseres/langsames Modell
+      - `-pro` = grösseres/langsames Modell
     - Beispiele:
       - `TCM-o1` (normal)
       - `TCM-o2-mini`
       - `TCM-o3-pro`
 - `train.py`
-  - L�dt/liest die Trainingsdaten aus `data/`.
+  - Lädt/liest die Trainingsdaten aus `data/`.
   - Trainiert das neuronale Netz.
   - Speichert das trainierte Modell nach `models/`.
-  - Konfigurierbar (Modellgr�ssen: mini/normal/pro).
+  - Konfigurierbar (Modellgrössen: mini/normal/pro).
 - `train-gpu.py`
-  - Eigenst�ndiges GPU-Training per `pyopencl`.
+  - Eigenständiges GPU-Training per `pyopencl`.
   - Erstellt kompatible Artefakte (`.npz`, `.json`, `_training.png`) im gleichen Format wie `train.py`.
-  - Bevorzugt automatisch GPU-Ger�te und kann Plattform/Ger�t explizit w�hlen.
+  - Bevorzugt automatisch GPU-Geräte und kann Plattform/Gerät explizit wählen.
 - `nn.py`
-  - Enth�lt den gemeinsamen NN-Code (Netzwerk, Vorhersage, Laden/Speichern).
+  - Enthält den gemeinsamen NN-Code (Netzwerk, Vorhersage, Laden/Speichern).
 - `app.py`
   - Startet eine einfache Zeichen-UI.
-  - Modell kann aus `models/` ausgew�hlt werden.
+  - Modell kann aus `models/` ausgewählt werden.
   - Zeichnung wird als Ziffer (0-9) vorhergesagt und angezeigt.
 - `requirements.txt`
-  - Ben�tigte Python-Pakete f�r Training und App.
+  - Benötigte Python-Pakete für Training und App.
 
 ## Ziel von `app.py`
 
-`app.py` soll als einfache Benutzeroberfl�che dienen: Zeichnen, Modell aus dem Verzeichnis w�hlen, Vorhersage anzeigen (inkl. Prozentwahrscheinlichkeiten pro Zahl).
+`app.py` soll als einfache Benutzeroberfläche dienen: Zeichnen, Modell aus dem Verzeichnis wählen, Vorhersage anzeigen (inkl. Prozentwahrscheinlichkeiten pro Zahl).
 
 ## Technische Vorgaben / Limitationen
 
 - Das neuronale Netz muss selbst implementiert werden (kein fertiges ML-Framework).
 - Nicht erlaubt: `tensorflow`, `pytorch`, `keras`, `scikit-learn`.
-- Erlaubt: `numpy`, `matplotlib` sowie normale Hilfsbibliotheken f�r Datei/GUI.
+- Erlaubt: `numpy`, `matplotlib` sowie normale Hilfsbibliotheken für Datei/GUI.
 - Trainingsprozess soll nachvollziehbar sein (Forward Pass, Fehlerberechnung, Backpropagation, Gradient Descent).
 - Das Modell soll auf (reduced) MNIST Ziffernklassifikation ausgerichtet sein.
 
 ## Rechenbackend
 
 - `app.py` und `train.py` laufen CPU-only mit `NumPy`.
-- F�r beschleunigtes Training auf einer GPU gibt es zus�tzlich `train-gpu.py` mit OpenCL (`pyopencl`). (Ab o4-pro w�re die CPU in einem Desktopcomputer sehr langsam. per GPU geht es bedeutend schneller)
+- Für beschleunigtes Training auf einer GPU gibt es zusätzlich `train-gpu.py` mit OpenCL (`pyopencl`). (Ab o4-pro wäre die CPU in einem Desktopcomputer sehr langsam. per GPU geht es bedeutend schneller)
 
 ## Datenquelle
 
@@ -67,15 +67,15 @@
   - Verwendet in Modellfamilie `TCM-o3` und `TCM-o4` (60'000 Training / 10'000 Testing).
 - EMNIST Digits (via `data/download_emnist.py`):
   - Verwendet ab Modellfamilie `TCM-o5`.
-  - Enth�lt ca. 240'000 Training-Samples und 40'000 Test-Samples.
-  - Bietet deutlich h�here Varianz in den Handschriften, was die Generalisierung verbessert.
-  - Wird in zusammenspiel mit MNIST-Full verwendet f�r ein Trainings-Set mit 300'000 Samples.
+  - Enthält ca. 240'000 Training-Samples und 40'000 Test-Samples.
+  - Bietet deutlich höhere Varianz in den Handschriften, was die Generalisierung verbessert.
+  - Wird in zusammenspiel mit MNIST-Full verwendet für ein Trainings-Set mit 300'000 Samples.
 
 ## Adam-Optimizer
 
 Ab Version 0.5 nutzen wir den **Adam-Optimizer** (Adaptive Moment Estimation). Im Vergleich zum Standard-SGD bietet er:
-1. **Momentum**: Er merkt sich die Richtung der letzten Updates und �berwindet so "lokale Minima" (Sackgassen) fl�ssiger.
-2. **Adaptive Lernrate**: Er passt die Lernrate f�r jedes Gewicht individuell an.
+1. **Momentum**: Er merkt sich die Richtung der letzten Updates und überwindet so "lokale Minima" (Sackgassen) flüssiger.
+2. **Adaptive Lernrate**: Er passt die Lernrate für jedes Gewicht individuell an.
 3. **Konvergenz**: Das Modell erreicht viel schneller (in deutlich weniger Epochen) eine hohe Genauigkeit.
 
 ###
@@ -84,9 +84,9 @@ Ab Version 0.5 nutzen wir den **Adam-Optimizer** (Adaptive Moment Estimation). I
 
 Alle Modelle liegen in `models/` als:
 
-- `.npz` � Gewichte
-- `.json` � Metadaten (u. a. Samples + Hyperparameter + finale Metriken)
-- `*_training.png` � Trainingskurve (Loss/Accuracy)
+- `.npz` = Gewichte
+- `.json` = Metadaten (u. a. Samples + Hyperparameter + finale Metriken)
+- `*_training.png` = Trainingskurve (Loss/Accuracy)
 
 ### Familie `TCM-o1` (First test trained in seconds on a Laptop)
 
@@ -98,10 +98,10 @@ Alle Modelle liegen in `models/` als:
 | `TCM-o1`      | 8'000 / 2'000      | 512    | 1 | 407.05K | 256    | 256   | 0.005 | 0.9125          |
 | `TCM-o1-pro`  | 8'000 / 2'000      | 2048   | 1 | 1.63M | 512    | 512   | 0.003 | 0.9145          |
 
-### Familie `TCM-o2` (Optimierte o1, k�nnte auf o1.1 genannt worden sein...)
+### Familie `TCM-o2` (Optimierte o1, könnte auf o1.1 genannt worden sein...)
 
 - Daten: 10'000 Train / 2'000 Test (aus `data/training` und `data/testing`).
-- �nderung gg�. `TCM-o1`: Wechsel von internem Split auf feste Ordner und fester Seed (42). Optimiertere Parameter.
+- Änderung ggü. `TCM-o1`: Wechsel von internem Split auf feste Ordner und fester Seed (42). Optimiertere Parameter.
 
 | Modell        | Daten (Train/Test) | hidden | hidden layers | parameters | epochs | batch size | Learning Rate | finale Test-Accuracy |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -112,7 +112,7 @@ Alle Modelle liegen in `models/` als:
 ### Familie `TCM-o3` (FULL DATASET and better Parameters)
 
 - Daten: 60'000 Train / 10'000 Test (aus `data/training` und `data/testing`).
-- �nderung gg�. `TCM-o2`: Wechsel von Reduced-Dataset (10'000/2'000) auf Full-Dataset (60'000/10'000). Optimiertere Parameter.
+- Änderung ggü. `TCM-o2`: Wechsel von Reduced-Dataset (10'000/2'000) auf Full-Dataset (60'000/10'000). Optimiertere Parameter.
 
 | Modell        | Daten (Train/Test) | hidden | hidden layers | parameters | epochs | batch size | Learning Rate    | finale Test-Accuracy |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -123,7 +123,7 @@ Alle Modelle liegen in `models/` als:
 ### Familie `TCM-o4` (Full Dataset, hidden layers)
 
 - Daten: 60'000 Train / 10'000 Test (aus `data/training` und `data/testing`).
-- �nderung gg�. `TCM-o3`:  Optimiertere Parameter. Anstatt 1 nun 2-3 Hidden Layers.
+- Änderung ggü. `TCM-o3`:  Optimiertere Parameter. Anstatt 1 nun 2-3 Hidden Layers.
 
 | Modell        | Daten (Train/Test) | hidden | hidden layers | parameters | epochs | batch size | Learning Rate | finale Test-Accuracy |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -140,7 +140,7 @@ Notiz zu `TCM-o4.1`:
 - Daten: Kombiniertes Set aus MNIST Full + EMNIST Digits (~300'000 Train / 50'000 Test).
 - Änderung ggü. `TCM-o4`: 
   - **Adam Optimizer**: Wechsel vom einfachen SGD auf den Adam-Optimizer.
-  - **Live-Graphen w�hrend dem trainieren**: Echtzeit-Visualisierung von Loss und Accuracy w�hrend dem trainieren.
+  - **Live-Graphen während dem trainieren**: Echtzeit-Visualisierung von Loss und Accuracy während dem trainieren.
   - Early Stopping mit patience 5
 
 | Modell        | Daten (Train/Test) | hidden | hidden layers | parameters | epochs | batch size | Learning Rate | finale Test-Accuracy |
