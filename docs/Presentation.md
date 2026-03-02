@@ -1,123 +1,258 @@
-# Pr�sentation - TCM-AI Ziffernerkennung (10 Minuten, 3 Personen)
+<!--
+Dieses Dokument ist als "Briefing" gedacht, das du 1:1 in eine Präsentations-KI (Copilot/Gamma/Canva/Beautiful.ai/etc.)
+kopieren kannst, damit sie daraus eine PowerPoint (PPTX) erzeugt.
+-->
 
-Ziel: Diese Vorlage ist so geschrieben, dass ihr sie einer KI geben k�nnt, damit sie daraus eine **PowerPoint** baut (Folien + Speaker Notes). Inhaltlich basiert sie auf `README.md` und `docs/TCM-AI_Dokumentation.docx`.
+# PROMPT: Erstelle eine PowerPoint zu "TCM-AI Ziffernerkennung" (10 Minuten, 3 Personen)
 
-## Vorgaben f�r die PPT
+Du bist eine Präsentations-KI und sollst aus den folgenden Projektdaten eine **fertige PowerPoint (PPTX)** erstellen.
 
-- Sprache: Deutsch
-- Dauer: **10 Minuten**
-- Team: **3 Personen**
-- Stil: klar, technisch korrekt, wenig Text, visuell
-- Pro Folie: max. 5 Bulletpoints
-- Speaker Notes: 2-4 S�tze
-- Pflicht: 1 Folie mit Tabelle/Chart aus `docs/tcm_accuracy.xlsx`
-- Kernaussagen:
-  - selbst implementiertes NN (ohne ML-Frameworks)
-  - Datenentwicklung von Start bis jetzt
-  - "Gr��e ist nicht alles"
+## Output-Anforderungen
 
-## Zeit- und Rollenplan (10:00)
+- Format: **PPTX**, 16:9, deutsch.
+- Zielpublikum: Klasse/Dozent, gemischtes Tech-Level.
+- Dauer: **10 Minuten total**.
+- Sprecher: **3 Personen**:
+  - Person A: nicht sehr technisch
+  - Person B: nicht sehr technisch
+  - Person C: technisch (kann Details zu NN/Adam/Datenpipeline/GPU erklären)
+- Stil: klar, wenige Wörter pro Slide, visuell (Icons/Diagramme/Timeline), keine überladenen Tabellen auf Slides.
+- Muss enthalten:
+  - "Entwicklung über Zeit" als Story (Iterationsschritte)
+  - Warum Adam Optimizer geholfen hat
+  - Warum und wann auf größere Datensätze gewechselt wurde
+  - Ergebnisse (Accuracy) und Vergleich der Modellfamilien
+  - Kurzer Demo-Teil/Anwendungsfall (Zeichen-UI)
 
-- **Person 1 (0:00-3:20):** Folien 1-3
-- **Person 2 (3:20-6:40):** Folien 4-6
-- **Person 3 (6:40-10:00):** Folien 7-9
+## Projekt-Kontext (kurz)
 
----
+- Projektname: **TCM-AI-Ziffernerkennung**
+- Aufgabe: Handschriftliche Ziffern (0-9) klassifizieren.
+- Technische Vorgabe: neuronales Netz **selbst implementiert**, keine fertigen ML-Frameworks.
+  - Nicht erlaubt: TensorFlow, PyTorch, Keras, scikit-learn
+  - Erlaubt: NumPy, Matplotlib, Standardbibliotheken (GUI/Datei)
+- Umsetzung:
+  - Training/Inference CPU: `train.py`, `nn.py`
+  - Optional schnelles GPU-Training: `train-gpu.py` (OpenCL via `pyopencl`)
+  - Demo UI: `app.py` (Zeichenfläche, Modell wählen, Vorhersage + Wahrscheinlichkeiten)
+- Modell-Artefakte pro Training in `models/`:
+  - `.npz` Gewichte
+  - `.json` Metadaten (Hyperparameter, Sample-Anzahl, finale Metriken)
+  - `*_training.png` Trainingskurve (Loss/Accuracy)
 
-## Folie 1 - Titel & Ziel (Person 1)
+## Datensätze (Daten-Story ist zentral)
 
-**Titel:** TCM-AI: Handschriftliche Ziffernerkennung mit eigenem neuronalen Netz  
-**Untertitel:** Von Reduced MNIST zu 300k+ Samples  
-**Footer:** Tim, Mika, Cedric | EFIN26g | M�rz 2026
+1. Reduced MNIST (Kaggle) – genutzt in `TCM-o1` und `TCM-o2`
+   - Grob: 10'000 Training / wenige Testing (in README als "Reduced-Dataset" beschrieben)
+   - Link: https://www.kaggle.com/datasets/mohamedgamal07/reduced-mnist
+2. MNIST PNG (Kaggle) – genutzt in `TCM-o3` und `TCM-o4`
+   - 60'000 Training / 10'000 Testing
+   - Link: https://www.kaggle.com/datasets/alexanderyyy/mnist-png
+3. EMNIST Digits – genutzt ab `TCM-o5` (Download-Skript: `data/download_emnist.py`)
+   - ca. 240'000 Training / 40'000 Test
+   - Kombiniert mit MNIST Full zu ca. **300'000 Train / 50'000 Test**
+   - Motivation: mehr Varianz an Handschriften, bessere Generalisierung
 
-**Speaker Notes:**
-Kurz vorstellen: Ziel war eine komplette Eigenimplementierung eines MLPs f�r Ziffern (0-9), ohne TensorFlow/PyTorch/Keras/scikit-learn.
+## Storyline: Entwicklung über die Zeit (Timeline)
 
-## Folie 2 - Problem, Einschr�nkungen, Besonderheiten (Person 1)
+Erzähle das Projekt als Iterationen, jeweils mit: Problem -> Änderung -> Effekt (Accuracy/Qualität/Speed).
 
-- Input: 28x28 Graustufenbild (784 Features)
-- Output: Klasse 0-9
-- Kein fertiges ML-Framework erlaubt
-- Alles selbst umgesetzt: Forward, Backprop, Training, Speicherung
+### Iteration 1: `TCM-o1` (erste lauffähige Version)
 
-**Speaker Notes:**
-Hier die "speziellen Sachen": Wir haben nicht nur ein Modell trainiert, sondern den gesamten Lernprozess technisch selbst gebaut und nachvollziehbar gemacht.
+- Datengröße: 8'000 Train / 2'000 Test (80/20 Split intern aus `data/`)
+- Modell: 1 Hidden Layer, einfache Parameter, schnell trainierbar (Laptop)
+- Ergebnis (finale Test-Accuracy):
+  - `TCM-o1-mini`: 0.9185
+  - `TCM-o1`: 0.9125
+  - `TCM-o1-pro`: 0.9145
+- Takeaway: Pipeline funktioniert, aber Generalisierung/Qualität begrenzt durch Datensatzgröße + Setup.
 
-## Folie 3 - Datens�tze: Start vs. Jetzt (Person 1)
+### Iteration 2: `TCM-o2` (Daten-Pipeline stabilisieren)
 
-- **Start (o1/o2):** Reduced MNIST, ca. 10k Train / 2k Test
-- **Zwischenschritt (o3/o4):** MNIST Full, 60k Train / 10k Test
-- **Jetzt (o5/o5.1):** MNIST + EMNIST kombiniert, ca. 300k Train / 50k Test
-- Ergebnis: deutlich bessere Generalisierung
+- Änderung ggü. `o1`:
+  - Wechsel von internem Split auf feste Ordnerstruktur `data/training` + `data/testing`
+  - Fester Seed (42) für reproduzierbare Ergebnisse
+  - Parameter etwas optimiert
+- Datengröße: 10'000 Train / 2'000 Test
+- Ergebnis:
+  - `TCM-o2-mini`: 0.9250
+  - `TCM-o2`: 0.9370
+  - `TCM-o2-pro`: 0.9485
+- Takeaway: Reproduzierbarkeit + saubere Splits = verlässlicheres Tuning.
 
-**Speaker Notes:**
-Diese Folie ist zentral: Nicht nur Architektur, sondern vor allem Datenmenge und Datenvielfalt haben den gr��ten Qualit�tssprung gebracht.
+### Iteration 3: `TCM-o3` (Wechsel auf Full MNIST)
 
-## Folie 4 - Modellarchitektur & Profile (Person 2)
+- Änderung ggü. `o2`:
+  - Wechsel von Reduced (10k/2k) auf Full MNIST (60k/10k)
+  - Parameter optimiert
+- Ergebnis:
+  - `TCM-o3-mini`: 0.9431
+  - `TCM-o3`: 0.9526
+  - `TCM-o3-pro`: 0.9603
+- Takeaway: Größeres Dataset bringt sichtbar bessere Accuracy.
 
-- MLP mit Fully Connected Layers
-- Profile: mini / normal / pro
-- 1 bis 3 Hidden Layers je nach Generation
-- Parameterbereich: ~100k bis ~10M
+### Iteration 4: `TCM-o4` (mehr Hidden Layers)
 
-**Speaker Notes:**
-Erkl�rt, warum ihr Modellprofile nutzt: gleiche Idee, aber unterschiedliche Trade-offs bei Geschwindigkeit, Trainingsdauer und Accuracy.
+- Änderung ggü. `o3`:
+  - Statt 1 Hidden Layer nun 2-3 Hidden Layers (mehr Kapazität)
+  - Optimiertere Parameter
+- Ergebnis:
+  - `TCM-o4-mini`: 0.9608
+  - `TCM-o4`: 0.9652
+  - `TCM-o4.1-pro`: 0.9832 (Sonderfall, siehe nächste Iteration)
+- Takeaway: Mehr Kapazität + gutes Training bringt nochmal Schub.
 
-## Folie 5 - Training & spezielle Technik (Person 2)
+### Iteration 4.1: `TCM-o4.1` (Adam Optimizer)
 
-- Forward Pass -> Softmax
-- Loss: Cross-Entropy
-- Backpropagation + Mini-Batches
-- Optimierer-Wechsel: von SGD zu Adam (ab o4.1/o5)
+- Änderung:
+  - Einführung **Adam** (Adaptive Moment Estimation) statt einfachem SGD.
+- Aussage, die du in Slides erklären sollst:
+  - Adam kombiniert Momentum + adaptive Lernraten pro Gewicht und konvergiert schneller/stabiler.
+- Ergebnis sichtbar im Vergleich: `o4.1-pro` erreicht 0.9832 (Full MNIST, 3 Hidden Layers).
 
-**Speaker Notes:**
-Der Wechsel auf Adam war ein wichtiger technischer Schritt: stabilere und schnellere Konvergenz, besonders bei gr��eren Modellen und Datens�tzen.
+### Iteration 5: `TCM-o5` (Mega Dataset + Adam + Training-UX)
 
-## Folie 6 - Weitere Specials im Projekt (Person 2)
+- Änderung ggü. `o4`:
+  - Datensätze kombiniert: MNIST Full + EMNIST Digits => ca. 300'000 Train / 50'000 Test
+  - Adam Optimizer als Standard
+  - Live-Graphen während Training (Loss/Accuracy)
+  - Early Stopping (patience 5)
+- Ergebnis:
+  - `TCM-o5-mini`: 0.9881
+  - `TCM-o5`: 0.9902
+  - `TCM-o5-pro`: 0.9901 (Notiz im Projekt: Benchmark wirkt schlechter als subjektive Qualität beim Ausprobieren)
+- Takeaway: Datensatz-Varianz + Adam => starke Generalisierung.
 
-- GPU-Training mit `train-gpu.py` (OpenCL)
-- Training-Monitoring (`*_training.png`)
-- Early Stopping in sp�teren Generationen
-- Data Augmentation ab o5.1
+### Iteration 5.1: `TCM-o5.1` (Data Augmentation)
 
-**Speaker Notes:**
-Das sind eure "speziellen Sachen" neben der reinen Architektur: Engineering-Entscheidungen, die messbar bessere Resultate gebracht haben.
+- Änderung ggü. `o5`:
+  - Data Augmentation eingebaut (z. B. Shift/Rotation)
+- Ergebnis:
+  - `TCM-o5.1-mini`: 0.9936
+  - `TCM-o5.1`: 0.9938
+  - `TCM-o5.1-pro`: 0.9937
+- Takeaway: Augmentation erhöht Robustheit weiter, ohne neue Daten sammeln zu müssen.
 
-## Folie 7 - Ergebnisse aus Excel (Pflichtfolie) (Person 3)
+## Technische Details (für Person C, aber nicht überladen)
 
-**Inhalt aus `docs/tcm_accuracy.xlsx`:**
+### Modelltyp
 
-- Tabelle/Chart: Modellfamilien und Test-Accuracy
-- Vergleich mini/normal/pro je Generation
-- Optional zweite Achse: Parameterzahl
+- Einfache MLP / Fully-Connected NN (aus `nn.py`), Klassifikation 0-9.
+- Training beinhaltet: Forward Pass, Loss, Backpropagation, Parameter-Updates.
 
-**Speaker Notes:**
-Nur Testmetriken vergleichen und kurz sagen, dass alle Zahlen aus euren eigenen Trainingsl�ufen stammen.
+### Adam in diesem Projekt (konkret)
 
-## Folie 8 - Kernaussage: "Gr��e ist nicht alles" (Person 3)
+- In `train.py` ist Adam Standard; Default Learning Rates:
+  - mini/normal: 0.0015
+  - pro: 0.0008
+- Training hat optionale Features:
+  - Early Stopping (CLI Default: 15; GPU-UI nutzt patience 5)
+  - Data Augmentation Flags (Shift/Rotation, Probability)
 
-- Gr��eres Modell != automatisch besser
-- Wichtiger sind: Datenqualit�t, Datenvielfalt, Optimierer, Hyperparameter
-- Beispiel aus euren Runs: pro oft nur knapp besser oder �hnlich
-- o5.1 zeigt: Setup + Daten schl�gt reine Modellgr��e
+### GPU-Training (OpenCL) als Engineering-Feature
 
-**Speaker Notes:**
-Bezieht euch direkt auf Folie 7 und nennt 1-2 konkrete Vergleichswerte aus Excel.
+- `train-gpu.py` nutzt `pyopencl` und eigene Kernel (Matrix-Multiplikationen usw.).
+- Zweck: Größere Modelle/Datensätze werden CPU-seitig sehr langsam; GPU beschleunigt Training deutlich.
+- Erzeugt kompatible Artefakte (`.npz`, `.json`, `*_training.png`) wie CPU-Training.
 
-## Folie 9 - Fazit & Abschluss (Person 3)
+## Empfohlene Slide-Struktur (10 Minuten)
 
-- Endstand: bis ~99% Test-Accuracy
-- Gr��te Fortschritte durch Datens�tze + Adam + sauberes Training
-- Praktischer Beweis: App-Demo (`app.py`) bei Bedarf
-- Takeaway: Verst�ndnis von NN von Grund auf aufgebaut
+Erstelle 8 Slides + 1 Backup (optional). Gib pro Slide:
+- Titel
+- 3-6 Bulletpoints (kurz)
+- Visual-Idee (Diagramm/Timeline/Icon)
+- Sprecher (A/B/C)
+- Sprecher-Notizen (30-60 Sekunden Text)
 
-**Speaker Notes:**
-Kurz, pr�zise Abschlussbotschaft. Wenn Zeit �brig bleibt: 30-60 Sek. Live-Demo oder Screenshot.
+### Zeitplan / Rollen
 
----
+- Person A (3:20):
+  - Slide 1, 2, 3: Motivation, Ziel, Constraints, Überblick App
+- Person B (3:20):
+  - Slide 4, 5: Timeline Iterationen (o1->o3) und Dataset-Wechsel
+- Person C (3:20):
+  - Slide 6, 7, 8: Adam, Architektur/Layer, o4->o5.1, GPU-Training, Fazit & Ausblick
 
-## Materialliste f�r die KI (PPT-Generator)
+## Konkrete Slides (Inhalt, den du verwenden MUSST)
 
-- `docs/tcm_accuracy.xlsx` (Ergebnisfolie)
-- 1-2 Trainingsplots aus `models/*_training.png`
-- optional Screenshot aus `app.py`
+### Slide 1: Titel & Team
+
+- Titel: "TCM-AI: Ziffernerkennung ohne ML-Frameworks"
+- Untertitel: "Von 10k Samples zu 300k, von SGD zu Adam"
+- Team: 3 Personen (Namen als Platzhalter: Person A/B/C)
+- Visual: großes Ziffern-Icon + kleines NN-Icon
+
+### Slide 2: Problem & Ziel
+
+- Ziel: Ziffern 0-9 aus Bild klassifizieren
+- Warum relevant: Handschrift variiert stark
+- Output: Wahrscheinlichkeit pro Klasse, beste Vorhersage
+- Visual: Beispiel-Ziffer + Output-Balkendiagramm (10 Klassen)
+
+### Slide 3: Constraints & Setup (nicht zu technisch)
+
+- "Netz selbst implementiert" (kein PyTorch/TensorFlow)
+- CPU-Training (NumPy) + optional GPU (OpenCL)
+- Demo-App: Zeichnen -> Modell wählen -> Vorhersage
+- Visual: Architektur-Skizze (Data -> Train -> Model -> App)
+
+### Slide 4: Timeline Teil 1 (o1 -> o2)
+
+- o1: erster Prototyp, kleiner Datensatz, interne Splits
+- o2: feste Train/Test-Ordner, reproduzierbar, bessere Accuracy
+- Zahlen: o1-mini 0.9185, o2 0.9370, o2-pro 0.9485
+- Visual: kleine Timeline + Accuracy-Pfeile nach oben
+
+### Slide 5: Timeline Teil 2 (o3: Dataset-Sprung)
+
+- Wechsel Reduced -> Full MNIST (60k/10k)
+- Accuracy steigt auf 0.9526 / 0.9603 (o3/o3-pro)
+- Kernaussage: "Datenmenge + Varianz = Generalisierung"
+- Visual: Balken "Dataset size" + "Accuracy"
+
+### Slide 6: o4 (mehr Layers) + Adam (o4.1)
+
+- o4: 2-3 Hidden Layers, Accuracy 0.9652 (o4)
+- o4.1-pro: Adam, 0.9832
+- Warum Adam: schneller/stabiler, adaptive Lernraten, Momentum
+- Visual: 2 Diagramme nebeneinander: "SGD vs Adam (schematisch)" + "Accuracy Jump"
+
+### Slide 7: o5/o5.1 (Mega Dataset + Augmentation)
+
+- Daten: MNIST Full + EMNIST Digits => ~300k/50k
+- o5: ~0.990
+- o5.1: ~0.994 (best: 0.9938)
+- Augmentation: Shift/Rotation => robustere Inputs
+- Visual: Beispiel Augmentation (shift/rotate) + Accuracy-Leaderboard
+
+### Slide 8: Engineering & Fazit (inkl. GPU)
+
+- GPU-Training via OpenCL für Geschwindigkeit (große Modelle/Datensätze)
+- Artefakte: `.npz`, `.json`, `*_training.png`
+- Fazit: Iteratives Vorgehen (Pipeline -> Daten -> Optimizer -> Augmentation)
+- Ausblick: Confusion Matrix, bessere Normalisierung, mehr Augmentation, leichte CNN-ähnliche Features (nur falls erlaubt)
+- Visual: "Lessons learned" 3 Kacheln + "Next steps" 3 Kacheln
+
+### Backup Slide (optional): Modell-Übersicht (nur als Appendix)
+
+Wenn du eine Tabelle machst, dann nur als Backup-Slide (nicht im Hauptteil zeigen).
+
+## Wichtige Zahlen (zum Einbauen in Charts)
+
+- Reduced-Dataset Phase:
+  - o1: 8k/2k, best ca. 0.9185
+  - o2: 10k/2k, best 0.9485
+- Full MNIST Phase:
+  - o3: 60k/10k, best 0.9603
+  - o4: 60k/10k, 0.9652
+  - o4.1-pro (Adam): 0.9832
+- Mega Dataset + Adam + Augmentation:
+  - o5: 300k/50k, best 0.9902
+  - o5.1: 300k/50k, best 0.9938
+
+## Letzte Anweisung
+
+Erzeuge die PPTX so, dass sie ohne Nachbearbeitung vortragsfertig ist:
+- klare Sprecher-Notizen je Slide
+- konsistente Farben/Schrift
+- Diagramme/Timelines statt Textwände
