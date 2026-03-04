@@ -161,3 +161,7 @@ Alle Modelle werden manuell noch getestet und die o5-Familie erkennt extrem viel
 
 Notiz zu `TCM-o5.1-Familie`:
 Data Augmentation eingebaut.
+
+Notiz zu `TCM-o5.2-Familie`:
+Data Augmentation aggressiver
+und LR-Scheduler eingebaut
