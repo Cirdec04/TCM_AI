@@ -18,14 +18,12 @@ from deps import ensure_requirements_installed
 
 ensure_requirements_installed(required_modules=("numpy", "matplotlib"))
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
 import numpy as np
 
 cl = None
 cl_array = None
+_plt = None
+_mpimg = None
 
 if TYPE_CHECKING:
     import pyopencl as _cl_types
@@ -84,7 +82,11 @@ MODEL_PROFILES = {
         "batch_size": 512,
     },
 }
-ADAM_LEARNING_RATE = 0.0015
+DEFAULT_ADAM_LEARNING_RATES = {
+    "mini": 0.0015,
+    "normal": 0.0015,
+    "pro": 0.0008,
+}
 
 ProgressCallback = Callable[[str, dict[str, Any]], None]
 
@@ -92,6 +94,28 @@ ProgressCallback = Callable[[str, dict[str, Any]], None]
 def _emit(callback: ProgressCallback | None, event: str, **data: Any) -> None:
     if callback is not None:
         callback(event, data)
+
+
+def _get_pyplot() -> Any:
+    global _plt
+    if _plt is not None:
+        return _plt
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as pyplot
+
+    _plt = pyplot
+    return _plt
+
+
+def _imread_image(path: Path) -> np.ndarray:
+    global _mpimg
+    if _mpimg is None:
+        import matplotlib.image as mpimg
+
+        _mpimg = mpimg
+    return np.asarray(_mpimg.imread(path))
 
 
 OPENCL_KERNELS = r"""
@@ -606,8 +630,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--early-stopping-patience",
         type=int,
-        default=5,
+        default=15,
         help="Stoppt, wenn sich die Test-Accuracy so viele Epochen nicht verbessert (0 = aus).",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=None,
+        help="Adam Learning Rate (Standard: mini/normal=0.0015, pro=0.0008).",
     )
     parser.add_argument("--augment", action="store_true", help="Aktiviert Data Augmentation beim Training.")
     parser.add_argument(
@@ -685,8 +715,7 @@ def _rotate_nearest_zero_fill(image: np.ndarray, angle_deg: float) -> np.ndarray
 
 
 def _load_image_as_vector(path: Path) -> np.ndarray:
-    pixels_raw = mpimg.imread(path)
-    pixels = _to_grayscale_unit(np.asarray(pixels_raw))
+    pixels = _to_grayscale_unit(_imread_image(path))
     pixels = _resize_nearest(pixels, width=28, height=28)
     return pixels.reshape(-1)
 
@@ -1541,6 +1570,7 @@ class OpenCLMLPTrainer:
 
 
 def save_training_plot(history: dict[str, list[float]], output_path: Path) -> None:
+    plt = _get_pyplot()
     epochs = np.arange(1, len(history["train_loss"]) + 1)
     epoch_count = len(epochs)
     x_ticks = np.linspace(1, max(1, epoch_count), num=6, dtype=int)
@@ -1626,7 +1656,8 @@ def train_model_gpu(
     batch_size_override: int | None,
     test_eval_interval: int,
     fast_math: bool,
-    early_stopping_patience: int = 5,
+    early_stopping_patience: int = 15,
+    learning_rate_override: float | None = None,
     augment_enabled: bool = False,
     aug_prob: float = 0.7,
     aug_shift: int = 2,
@@ -1641,6 +1672,8 @@ def train_model_gpu(
         raise ValueError("--test-eval-interval muss >= 1 sein.")
     if early_stopping_patience < 0:
         raise ValueError("--early-stopping-patience muss >= 0 sein.")
+    if learning_rate_override is not None and learning_rate_override <= 0:
+        raise ValueError("--learning-rate muss > 0 sein.")
     if not 0.0 <= aug_prob <= 1.0:
         raise ValueError("--aug-prob muss zwischen 0.0 und 1.0 liegen.")
     if aug_shift < 0:
@@ -1653,7 +1686,11 @@ def train_model_gpu(
     hidden_layers = int(profile["hidden_layers"])
     epochs = int(profile["epochs"])
     base_batch_size = int(profile["batch_size"])
-    base_learning_rate = ADAM_LEARNING_RATE
+    base_learning_rate = (
+        float(learning_rate_override)
+        if learning_rate_override is not None
+        else float(DEFAULT_ADAM_LEARNING_RATES[size])
+    )
     seed = get_fixed_seed()
 
     effective_batch_size = int(batch_size_override) if batch_size_override is not None else base_batch_size
@@ -1712,7 +1749,7 @@ def train_model_gpu(
             "Training startet mit: "
             f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
             f"batch_size={base_batch_size}, effective_batch_size={effective_batch_size}, "
-            f"optimizer=adam, seed={seed}, fast_math={fast_math}, "
+            f"optimizer=adam, learning_rate={base_learning_rate}, seed={seed}, fast_math={fast_math}, "
             f"early_stopping_patience={early_stopping_patience}, "
             f"augmentation={augment_enabled} (prob={aug_prob}, shift={aug_shift}, rot={aug_rot})"
         ),
@@ -1910,6 +1947,7 @@ def train_model_gpu(
         "effective_batch_size": effective_batch_size,
         "test_eval_interval": test_eval_interval,
         "optimizer": "adam",
+        "learning_rate": float(base_learning_rate),
         "parameters": {
             "total": int(parameter_total),
             "human": format_parameter_count(parameter_total),
@@ -1988,6 +2026,7 @@ def run_cli(args: argparse.Namespace) -> None:
         test_eval_interval=args.test_eval_interval,
         fast_math=not args.no_fast_math,
         early_stopping_patience=args.early_stopping_patience,
+        learning_rate_override=args.learning_rate,
         augment_enabled=args.augment,
         aug_prob=args.aug_prob,
         aug_shift=args.aug_shift,
@@ -2167,7 +2206,8 @@ class TrainingUI:
                 batch_size_override=None,
                 test_eval_interval=1,
                 fast_math=True,
-                early_stopping_patience=5,
+                early_stopping_patience=15,
+                learning_rate_override=None,
                 augment_enabled=augment_enabled,
                 stop_event=self.stop_training_event,
                 callback=callback,

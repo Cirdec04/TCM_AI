@@ -1,21 +1,21 @@
 {
-  "model_name": "TCM-o5.2-mini",
-  "created_at": "2026-03-04T17:22:56",
+  "model_name": "TCM-o5.2",
+  "created_at": "2026-03-04T17:31:00",
   "train_data_dir": "B:\\Antigravity und github repos\\TCM_AI\\data\\training",
   "test_data_dir": "B:\\Antigravity und github repos\\TCM_AI\\data\\testing",
-  "size": "mini",
-  "hidden_size": 256,
+  "size": "normal",
+  "hidden_size": 512,
   "hidden_layers": 2,
-  "epochs": 96,
-  "epochs_trained": 89,
+  "epochs": 192,
+  "epochs_trained": 109,
   "batch_size": 512,
   "effective_batch_size": 512,
   "test_eval_interval": 1,
   "optimizer": "adam",
   "learning_rate": 0.0015,
   "parameters": {
-    "total": 269322,
-    "human": "269.3K"
+    "total": 669706,
+    "human": "669.7K"
   },
   "seed": 42,
   "augmentation": {
@@ -28,8 +28,8 @@
     "enabled": true,
     "patience": 15,
     "stopped_early": true,
-    "best_test_acc": 0.99564,
-    "best_test_epoch": 74
+    "best_test_acc": 0.99586,
+    "best_test_epoch": 94
   },
   "stopped_by_user": false,
   "compute_backend": "opencl",
@@ -50,27 +50,27 @@
     "test": 50000
   },
   "final_metrics": {
-    "train_loss": 0.011643342242485593,
-    "train_acc": 0.9963135043373151,
-    "test_loss": 0.017526164856176356,
-    "test_acc": 0.99564,
+    "train_loss": 0.011981264333464777,
+    "train_acc": 0.9964237148037542,
+    "test_loss": 0.01923119760489097,
+    "test_acc": 0.99586,
     "test_acc_per_digit": [
-      0.9967871485943776,
-      0.997078870496592,
-      0.9976152623211447,
-      0.9946107784431137,
-      0.9935768767563228,
-      0.9938675388389206,
-      0.9971762807583703,
-      0.994431185361973,
-      0.9963811821471653,
-      0.9948093431822719
+      0.9975903614457832,
+      0.9964946445959104,
+      0.995429252782194,
+      0.9948103792415169,
+      0.9957848253713368,
+      0.9957072771872445,
+      0.9965711980637354,
+      0.9964200477326969,
+      0.9935665460394049,
+      0.9962068277101218
     ]
   },
-  "training_time_seconds": 195.2216444000369,
+  "training_time_seconds": 326.0986089000362,
   "artifacts": {
-    "model_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5.2-mini.npz",
-    "plot_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5.2-mini_training.png",
-    "metadata_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5.2-mini.json"
+    "model_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5.2.npz",
+    "plot_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5.2_training.png",
+    "metadata_file": "B:\\Antigravity und github repos\\TCM_AI\\models\\TCM-o5.2.json"
   }
 }
