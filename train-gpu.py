@@ -437,6 +437,9 @@ __kernel void make_aug_params(
     __global int* shift_x,
     __global int* shift_y,
     __global float* apply_mask,
+    __global float* gain,
+    __global float* bias,
+    __global float* noise_std,
     const int M,
     const uint seed,
     const uint epoch_idx,
@@ -458,7 +461,18 @@ __kernel void make_aug_params(
 
     state = xorshift32(state);
     const float u_mask = u01_from_uint(state);
-    apply_mask[i] = (u_mask <= prob) ? 1.0f : 0.0f;
+    const int do_apply = (u_mask <= prob) ? 1 : 0;
+    apply_mask[i] = do_apply ? 1.0f : 0.0f;
+
+    if (!do_apply) {
+        shift_x[i] = 0;
+        shift_y[i] = 0;
+        angles[i] = 0.0f;
+        gain[i] = 1.0f;
+        bias[i] = 0.0f;
+        noise_std[i] = 0.0f;
+        return;
+    }
 
     state = xorshift32(state ^ 0x9E3779B9U);
     if (max_shift > 0) {
@@ -479,6 +493,18 @@ __kernel void make_aug_params(
     state = xorshift32(state ^ 0xC2B2AE35U);
     const float u_angle = u01_from_uint(state);
     angles[i] = ((u_angle * 2.0f) - 1.0f) * max_angle_rad;
+
+    state = xorshift32(state ^ 0x27D4EB2FU);
+    const float u_gain = u01_from_uint(state);
+    gain[i] = 0.85f + (u_gain * 0.35f);
+
+    state = xorshift32(state ^ 0x165667B1U);
+    const float u_bias = u01_from_uint(state);
+    bias[i] = (u_bias - 0.5f) * 0.16f;
+
+    state = xorshift32(state ^ 0xD3A2646CU);
+    const float u_noise = u01_from_uint(state);
+    noise_std[i] = u_noise * 0.05f;
 }
 
 __kernel void augment_affine_nearest(
@@ -488,6 +514,9 @@ __kernel void augment_affine_nearest(
     __global const int* shift_x,
     __global const int* shift_y,
     __global const float* apply_mask,
+    __global const float* gain,
+    __global const float* bias,
+    __global const float* noise_std,
     const int M,
     const int width,
     const int height
@@ -527,6 +556,20 @@ __kernel void augment_affine_nearest(
     float value = 0.0f;
     if (src_x >= 0 && src_x < width && src_y >= 0 && src_y < height) {
         value = input_batch[base + src_y * width + src_x];
+    }
+    uint noise_state = (uint)(sample + 1) * 747796405U;
+    noise_state ^= (uint)(pix + 1) * 2891336453U;
+    noise_state ^= (uint)(shift_x[sample] + 17) * 1181783497U;
+    noise_state ^= (uint)(shift_y[sample] + 31) * 277803737U;
+    noise_state = xorshift32(noise_state);
+    const float noise_u = u01_from_uint(noise_state);
+    const float noise = ((noise_u * 2.0f) - 1.0f) * noise_std[sample];
+
+    value = (value * gain[sample]) + bias[sample] + noise;
+    if (value < 0.0f) {
+        value = 0.0f;
+    } else if (value > 1.0f) {
+        value = 1.0f;
     }
     output_batch[base + pix] = value;
 }
@@ -718,6 +761,15 @@ def augment_batch(
             angle = float(rng.uniform(-max_rotation, max_rotation))
             image = _rotate_nearest_zero_fill(image, angle_deg=angle)
 
+        contrast = float(rng.uniform(0.85, 1.2))
+        brightness = float(rng.uniform(-0.08, 0.08))
+        image = np.clip((image * contrast) + brightness, 0.0, 1.0)
+
+        if rng.random() < 0.35:
+            noise_std = float(rng.uniform(0.01, 0.05))
+            noise = rng.normal(0.0, noise_std, image.shape).astype(np.float32)
+            image = np.clip(image + noise, 0.0, 1.0)
+
         out[sample_idx] = image.reshape(-1)
     return out
 
@@ -751,6 +803,14 @@ def format_parameter_count(total: int) -> str:
     if total >= 1_000:
         return f"{total / 1_000:.1f}K"
     return str(total)
+
+
+def cosine_learning_rate(base_lr: float, epoch: int, total_epochs: int, min_lr_ratio: float = 0.1) -> float:
+    if total_epochs <= 1:
+        return float(base_lr)
+    progress = float(epoch - 1) / float(total_epochs - 1)
+    cosine = 0.5 * (1.0 + float(np.cos(np.pi * progress)))
+    return float(base_lr) * (float(min_lr_ratio) + (1.0 - float(min_lr_ratio)) * cosine)
 
 
 def enumerate_opencl_devices() -> list[OpenCLDeviceRef]:
@@ -922,6 +982,9 @@ class OpenCLMLPTrainer:
         self.aug_shift_x = cl_array.empty(self.queue, (self.batch_size,), dtype=np.int32)
         self.aug_shift_y = cl_array.empty(self.queue, (self.batch_size,), dtype=np.int32)
         self.aug_mask = cl_array.empty(self.queue, (self.batch_size,), dtype=np.float32)
+        self.aug_gain = cl_array.empty(self.queue, (self.batch_size,), dtype=np.float32)
+        self.aug_bias = cl_array.empty(self.queue, (self.batch_size,), dtype=np.float32)
+        self.aug_noise_std = cl_array.empty(self.queue, (self.batch_size,), dtype=np.float32)
 
         self.host_loss = np.empty((self.batch_size,), dtype=np.float32)
         self.host_correct = np.empty((self.batch_size,), dtype=np.int32)
@@ -1133,6 +1196,9 @@ class OpenCLMLPTrainer:
             self.aug_shift_x.data,
             self.aug_shift_y.data,
             self.aug_mask.data,
+            self.aug_gain.data,
+            self.aug_bias.data,
+            self.aug_noise_std.data,
             np.int32(m),
             np.int32(width),
             np.int32(height),
@@ -1170,6 +1236,9 @@ class OpenCLMLPTrainer:
             self.aug_shift_x.data,
             self.aug_shift_y.data,
             self.aug_mask.data,
+            self.aug_gain.data,
+            self.aug_bias.data,
+            self.aug_noise_std.data,
             np.int32(m),
             np.uint32(seed),
             np.uint32(epoch_idx),
@@ -1537,7 +1606,7 @@ def train_model_gpu(
     hidden_layers = int(profile["hidden_layers"])
     epochs = int(profile["epochs"])
     base_batch_size = int(profile["batch_size"])
-    learning_rate = ADAM_LEARNING_RATE
+    base_learning_rate = ADAM_LEARNING_RATE
     seed = get_fixed_seed()
 
     effective_batch_size = int(batch_size_override) if batch_size_override is not None else base_batch_size
@@ -1609,6 +1678,8 @@ def train_model_gpu(
     early_stopping_enabled = early_stopping_patience > 0
     best_test_acc = float("-inf")
     best_test_epoch = 0
+    best_weights_snapshot: list[np.ndarray] | None = None
+    best_biases_snapshot: list[np.ndarray] | None = None
     epochs_without_improvement = 0
     stopped_early = False
     stopped_by_user = False
@@ -1620,7 +1691,11 @@ def train_model_gpu(
 
     _emit(callback, "info", message="Übertrage vollständigen Datensatz in den VRAM...")
     if augment_enabled:
-        _emit(callback, "info", message="Augmentation aktiv: GPU-Kernel (Shift/Rotation) im VRAM-Trainingspfad.")
+        _emit(
+            callback,
+            "info",
+            message="Augmentation aktiv: GPU-Kernel (Shift/Rotation + Kontrast/Helligkeit + Rauschen) im VRAM-Trainingspfad.",
+        )
     x_train_gpu = cl_array.to_device(queue, x_train)
     y_train_gpu = cl_array.to_device(queue, y_train.astype(np.int32))
     indices_gpu = cl_array.empty(queue, (effective_batch_size,), dtype=np.int32)
@@ -1628,6 +1703,7 @@ def train_model_gpu(
     y_test_gpu = cl_array.to_device(queue, y_test.astype(np.int32))
 
     for epoch in range(1, epochs + 1):
+        learning_rate = cosine_learning_rate(base_learning_rate, epoch=epoch, total_epochs=epochs)
         if stop_event is not None and stop_event.is_set():
             stopped_by_user = True
             break
@@ -1714,15 +1790,16 @@ def train_model_gpu(
             test_acc=test_acc,
         )
 
-        if should_eval_test and early_stopping_enabled:
+        if should_eval_test:
             if test_acc > best_test_acc:
                 best_test_acc = test_acc
                 best_test_epoch = epoch
+                best_weights_snapshot, best_biases_snapshot = trainer.export_weights()
                 epochs_without_improvement = 0
-            else:
+            elif early_stopping_enabled:
                 epochs_without_improvement += 1
 
-            if epochs_without_improvement >= early_stopping_patience:
+            if early_stopping_enabled and epochs_without_improvement >= early_stopping_patience:
                 stopped_early = True
                 _emit(
                     callback,
@@ -1745,26 +1822,26 @@ def train_model_gpu(
             best_idx = int(np.argmax(np.asarray(history["test_acc"], dtype=np.float32)))
             best_test_epoch = best_idx + 1
             best_test_acc = float(history["test_acc"][best_idx])
+        best_metrics_idx = int(np.clip(best_test_epoch - 1, 0, len(history["test_acc"]) - 1))
+        final_metrics = {
+            "train_loss": float(history["train_loss"][best_metrics_idx]),
+            "train_acc": float(history["train_acc"][best_metrics_idx]),
+            "test_loss": float(history["test_loss"][best_metrics_idx]),
+            "test_acc": float(history["test_acc"][best_metrics_idx]),
+        }
     else:
         best_test_acc = 0.0
         best_test_epoch = 0
-
-    weights, biases = trainer.export_weights()
-
-    if history["train_loss"] and history["test_loss"] and history["train_acc"] and history["test_acc"]:
-        final_metrics = {
-            "train_loss": float(history["train_loss"][-1]),
-            "train_acc": float(history["train_acc"][-1]),
-            "test_loss": float(history["test_loss"][-1]),
-            "test_acc": float(history["test_acc"][-1]),
-        }
-    else:
         final_metrics = {
             "train_loss": 0.0,
             "train_acc": 0.0,
             "test_loss": 0.0,
             "test_acc": 0.0,
         }
+
+    if best_weights_snapshot is None or best_biases_snapshot is None:
+        best_weights_snapshot, best_biases_snapshot = trainer.export_weights()
+    weights, biases = best_weights_snapshot, best_biases_snapshot
 
     metadata: dict[str, object] = {
         "model_name": model_name,

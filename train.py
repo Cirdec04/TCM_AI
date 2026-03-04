@@ -234,6 +234,15 @@ def augment_batch(
             angle = float(rng.uniform(-max_rotation, max_rotation))
             image = _rotate_nearest_zero_fill(image, angle_deg=angle)
 
+        contrast = float(rng.uniform(0.85, 1.2))
+        brightness = float(rng.uniform(-0.08, 0.08))
+        image = np.clip((image * contrast) + brightness, 0.0, 1.0)
+
+        if rng.random() < 0.35:
+            noise_std = float(rng.uniform(0.01, 0.05))
+            noise = rng.normal(0.0, noise_std, image.shape).astype(np.float32)
+            image = np.clip(image + noise, 0.0, 1.0)
+
         out[sample_idx] = image.reshape(-1)
 
     return out
@@ -268,6 +277,14 @@ def format_parameter_count(total: int) -> str:
     if total >= 1_000:
         return f"{total / 1_000:.1f}K"
     return str(total)
+
+
+def cosine_learning_rate(base_lr: float, epoch: int, total_epochs: int, min_lr_ratio: float = 0.1) -> float:
+    if total_epochs <= 1:
+        return float(base_lr)
+    progress = float(epoch - 1) / float(total_epochs - 1)
+    cosine = 0.5 * (1.0 + float(np.cos(np.pi * progress)))
+    return float(base_lr) * (float(min_lr_ratio) + (1.0 - float(min_lr_ratio)) * cosine)
 
 
 def save_training_plot(history: dict[str, list[float]], output_path: Path) -> None:
@@ -349,7 +366,7 @@ def train_model(
     hidden_layers = int(profile["hidden_layers"])
     epochs = int(profile["epochs"])
     batch_size = int(profile["batch_size"])
-    learning_rate = float(learning_rate_override) if learning_rate_override is not None else float(DEFAULT_ADAM_LEARNING_RATES[size])
+    base_learning_rate = float(learning_rate_override) if learning_rate_override is not None else float(DEFAULT_ADAM_LEARNING_RATES[size])
     seed = get_fixed_seed()
 
     model_name = build_model_name(version=version, size=size)
@@ -375,7 +392,7 @@ def train_model(
         message=(
             "Training startet mit: "
             f"size={size}, hidden_size={hidden_size}, hidden_layers={hidden_layers}, epochs={epochs}, "
-            f"batch_size={batch_size}, optimizer=adam, learning_rate={learning_rate}, seed={seed}, "
+            f"batch_size={batch_size}, optimizer=adam, learning_rate={base_learning_rate}, seed={seed}, "
             f"early_stopping_patience={early_stopping_patience}, "
             f"augmentation={augment_enabled} (prob={aug_prob}, shift={aug_shift}, rot={aug_rot})"
         ),
@@ -404,6 +421,8 @@ def train_model(
     early_stopping_enabled = early_stopping_patience > 0
     best_test_acc = float("-inf")
     best_test_epoch = 0
+    best_weights_snapshot = [model.to_numpy(weight).copy() for weight in model.weights]
+    best_biases_snapshot = [model.to_numpy(bias).copy() for bias in model.biases]
     epochs_without_improvement = 0
     stopped_early = False
 
@@ -415,6 +434,7 @@ def train_model(
     progress_every = max(1, num_batches // 4)
 
     for epoch in range(1, epochs + 1):
+        learning_rate = cosine_learning_rate(base_learning_rate, epoch=epoch, total_epochs=epochs)
         indices = rng.permutation(num_samples)
 
         batch_losses: list[float] = []
@@ -471,15 +491,17 @@ def train_model(
             test_acc=test_acc,
         )
 
-        if should_eval_test and early_stopping_enabled:
+        if should_eval_test:
             if test_acc > best_test_acc:
                 best_test_acc = test_acc
                 best_test_epoch = epoch
+                best_weights_snapshot = [model.to_numpy(weight).copy() for weight in model.weights]
+                best_biases_snapshot = [model.to_numpy(bias).copy() for bias in model.biases]
                 epochs_without_improvement = 0
-            else:
+            elif early_stopping_enabled:
                 epochs_without_improvement += 1
 
-            if epochs_without_improvement >= early_stopping_patience:
+            if early_stopping_enabled and epochs_without_improvement >= early_stopping_patience:
                 stopped_early = True
                 _emit(
                     callback,
@@ -499,9 +521,21 @@ def train_model(
             best_idx = int(np.argmax(np.asarray(history["test_acc"], dtype=np.float32)))
             best_test_epoch = best_idx + 1
             best_test_acc = float(history["test_acc"][best_idx])
+        best_metrics_idx = int(np.clip(best_test_epoch - 1, 0, len(history["test_acc"]) - 1))
+        final_train_loss = float(history["train_loss"][best_metrics_idx])
+        final_train_acc = float(history["train_acc"][best_metrics_idx])
+        final_test_loss = float(history["test_loss"][best_metrics_idx])
+        final_test_acc = float(history["test_acc"][best_metrics_idx])
     else:
         best_test_acc = 0.0
         best_test_epoch = 0
+        final_train_loss = 0.0
+        final_train_acc = 0.0
+        final_test_loss = 0.0
+        final_test_acc = 0.0
+
+    model.weights = [model.asarray(weight.astype(np.float32, copy=False), dtype=xp.float32) for weight in best_weights_snapshot]
+    model.biases = [model.asarray(bias.astype(np.float32, copy=False), dtype=xp.float32) for bias in best_biases_snapshot]
 
     metadata: dict[str, object] = {
         "model_name": model_name,
@@ -517,7 +551,7 @@ def train_model(
         "effective_batch_size": effective_batch_size,
         "test_eval_interval": test_eval_interval,
         "optimizer": "adam",
-        "learning_rate": float(learning_rate),
+        "learning_rate": float(base_learning_rate),
         "parameters": {
             "total": int(parameter_total),
             "human": format_parameter_count(parameter_total),
@@ -539,10 +573,10 @@ def train_model(
         },
         "samples": {"total": int(len(y_train) + len(y_test)), "train": int(len(y_train)), "test": int(len(y_test))},
         "final_metrics": {
-            "train_loss": float(history["train_loss"][-1]),
-            "train_acc": float(history["train_acc"][-1]),
-            "test_loss": float(history["test_loss"][-1]),
-            "test_acc": float(history["test_acc"][-1]),
+            "train_loss": final_train_loss,
+            "train_acc": final_train_acc,
+            "test_loss": final_test_loss,
+            "test_acc": final_test_acc,
         },
         "training_time_seconds": float(training_time_seconds),
         "artifacts": {
