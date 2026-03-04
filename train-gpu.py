@@ -2059,13 +2059,8 @@ class TrainingUI:
         self.progress["maximum"] = epochs
         self.progress["value"] = 0
         self.status_var.set("Training laeuft...")
-        self._append_log(f"Starte Training: size={size}, version={version}, backend=gpu")
-
-        # Reset Plot
-        for key in self.history_data:
-            self.history_data[key] = []
-        self._setup_axes()
-        self.canvas.draw()
+        augment_enabled = bool(self.augment_var.get())
+        self._append_log(f"Starte Training: size={size}, version={version}, augment={augment_enabled}, backend=gpu")
 
         self.worker_thread = threading.Thread(target=self._worker, args=(size, version, augment_enabled), daemon=False)
         self.worker_thread.start()
