@@ -33,6 +33,11 @@
   - Eigenständiges GPU-Training per `pyopencl`.
   - Erstellt kompatible Artefakte (`.npz`, `.json`, `_training.png`) im gleichen Format wie `train.py`.
   - Bevorzugt automatisch GPU-Geräte und kann Plattform/Gerät explizit wählen.
+  - Option `--use-custom-data`: mischt zusätzlich Daten aus `data/custom/training` und `data/custom/testing` bei.
+- `collect-data.py`
+  - Zeichen-UI zum Sammeln eigener Ziffern.
+  - Speichert automatisch nach `data/custom/training/<digit>` oder `data/custom/testing/<digit>`.
+  - Train/Test-Split ist in der UI einstellbar (Standard 80/20).
 - `nn.py`
   - Enthält den gemeinsamen NN-Code (Netzwerk, Vorhersage, Laden/Speichern).
 - `app.py`
@@ -70,6 +75,9 @@
   - Enthält ca. 240'000 Training-Samples und 40'000 Test-Samples.
   - Bietet deutlich höhere Varianz in den Handschriften, was die Generalisierung verbessert.
   - Wird in zusammenspiel mit MNIST-Full verwendet für ein Trainings-Set mit 300'000 Samples.
+- Eigene Daten (`collect-data.py`):
+  - Optional unter `data/custom/training` und `data/custom/testing`.
+  - Werden nur verwendet, wenn beim Training `--use-custom-data` aktiv ist (CPU und GPU).
 
 ## Adam-Optimizer
 
@@ -151,7 +159,8 @@ Notiz zu `TCM-o4.1`:
 | `TCM-o5.1-mini` | 300'000 / 50'000 | 256    | 2 | 269.3K | 44     | 512   | Adam | 0.9936 |
 | `TCM-o5.1`      | 300'000 / 50'000 | 512    | 2 | 669.7K | 40     | 512   | Adam | 0.9938 |
 | `TCM-o5.1-pro`  | 300'000 / 50'000 | 2048   | 3 | 10.02M | 22     | 512   | Adam | 0.9937 |
-| `TCM-o5.2-mini` | 300'000 / 50'000 | 256    | 2 | 269.3K | 41     | 512   | Adam | 0.9947 |
+| `TCM-o5.2-mini` | 300'000 / 50'000 | 256    | 2 | 269.3K | 89     | 512   | Adam | 0.9956 |
+| `TCM-o5.2`      | 300'000 / 50'000 | 512    | 2 | 669.7K | 109    | 512   | Adam | 0.9959 |
 
 Notiz zu `TCM-o5-pro`:
 Benchmark zeigt es schlechter an als es sich anfühlt. Beim ausprobieren war es merkbar besser als o5.
