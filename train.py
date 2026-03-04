@@ -287,6 +287,21 @@ def cosine_learning_rate(base_lr: float, epoch: int, total_epochs: int, min_lr_r
     return float(base_lr) * (float(min_lr_ratio) + (1.0 - float(min_lr_ratio)) * cosine)
 
 
+def compute_per_digit_accuracy(predictions: np.ndarray, labels: np.ndarray, num_classes: int = 10) -> list[float]:
+    preds = np.asarray(predictions, dtype=np.int64).reshape(-1)
+    y_true = np.asarray(labels, dtype=np.int64).reshape(-1)
+    per_digit: list[float] = []
+    for digit in range(num_classes):
+        mask = y_true == digit
+        total = int(np.count_nonzero(mask))
+        if total == 0:
+            per_digit.append(0.0)
+        else:
+            correct = int(np.count_nonzero(preds[mask] == digit))
+            per_digit.append(float(correct) / float(total))
+    return per_digit
+
+
 def save_training_plot(history: dict[str, list[float]], output_path: Path) -> None:
     epochs = np.arange(1, len(history["train_loss"]) + 1)
     epoch_count = len(epochs)
@@ -338,6 +353,7 @@ def train_model(
     aug_prob: float = 0.7,
     aug_shift: int = 2,
     aug_rot: float = 10.0,
+    stop_event: threading.Event | None = None,
 ) -> dict[str, object]:
     if size not in MODEL_PROFILES:
         raise ValueError("Ungueltige Groesse. Erlaubt: mini, normal, pro.")
@@ -410,6 +426,7 @@ def train_model(
     xp = model.xp
     x_test_backend = model.asarray(x_test, dtype=xp.float32)
     y_test_backend = model.asarray(y_test, dtype=xp.int64)
+    y_test_np = model.to_numpy(y_test_backend).astype(np.int64, copy=False)
 
     effective_batch_size = batch_size
     test_eval_interval = 1
@@ -417,14 +434,17 @@ def train_model(
     parameter_total = count_parameters(layer_sizes)
 
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
+    history_test_acc_per_digit: list[list[float]] = []
     rng = np.random.default_rng(seed)
     early_stopping_enabled = early_stopping_patience > 0
     best_test_acc = float("-inf")
     best_test_epoch = 0
     best_weights_snapshot = [model.to_numpy(weight).copy() for weight in model.weights]
     best_biases_snapshot = [model.to_numpy(bias).copy() for bias in model.biases]
+    last_test_acc_per_digit = [0.0] * 10
     epochs_without_improvement = 0
     stopped_early = False
+    stopped_by_user = False
 
     _emit(callback, "start", epochs=epochs)
 
@@ -434,6 +454,9 @@ def train_model(
     progress_every = max(1, num_batches // 4)
 
     for epoch in range(1, epochs + 1):
+        if stop_event is not None and stop_event.is_set():
+            stopped_by_user = True
+            break
         learning_rate = cosine_learning_rate(base_learning_rate, epoch=epoch, total_epochs=epochs)
         indices = rng.permutation(num_samples)
 
@@ -441,6 +464,9 @@ def train_model(
         batch_accs: list[float] = []
 
         for batch_idx, start in enumerate(range(0, num_samples, effective_batch_size), start=1):
+            if stop_event is not None and stop_event.is_set():
+                stopped_by_user = True
+                break
             end = start + effective_batch_size
             batch_indices = indices[start:end]
             x_batch_np = x_train[batch_indices]
@@ -466,11 +492,16 @@ def train_model(
                     message=f"Epoch {epoch}/{epochs}: Batch {batch_idx}/{num_batches}",
                 )
 
+        if stopped_by_user:
+            break
+
         train_loss = float(np.mean(batch_losses))
         train_acc = float(np.mean(batch_accs))
         should_eval_test = (epoch == 1) or (epoch % test_eval_interval == 0) or (epoch == epochs)
         if should_eval_test:
             test_loss, test_acc = model.evaluate(x_test_backend, y_test_backend)
+            test_preds = model.predict(x_test_backend)
+            last_test_acc_per_digit = compute_per_digit_accuracy(test_preds, y_test_np, num_classes=10)
         else:
             test_loss = float(history["test_loss"][-1]) if history["test_loss"] else 0.0
             test_acc = float(history["test_acc"][-1]) if history["test_acc"] else 0.0
@@ -479,6 +510,7 @@ def train_model(
         history["train_acc"].append(train_acc)
         history["test_loss"].append(test_loss)
         history["test_acc"].append(test_acc)
+        history_test_acc_per_digit.append(list(last_test_acc_per_digit))
 
         _emit(
             callback,
@@ -489,6 +521,7 @@ def train_model(
             train_acc=train_acc,
             test_loss=test_loss,
             test_acc=test_acc,
+            test_acc_per_digit=list(last_test_acc_per_digit),
         )
 
         if should_eval_test:
@@ -513,6 +546,9 @@ def train_model(
                 )
                 break
 
+    if stopped_by_user:
+        _emit(callback, "info", message="Training manuell beendet (End Training Now).")
+
     training_time_seconds = time.perf_counter() - start_time
     epochs_trained = len(history["train_loss"])
 
@@ -526,6 +562,7 @@ def train_model(
         final_train_acc = float(history["train_acc"][best_metrics_idx])
         final_test_loss = float(history["test_loss"][best_metrics_idx])
         final_test_acc = float(history["test_acc"][best_metrics_idx])
+        final_test_acc_per_digit = list(history_test_acc_per_digit[best_metrics_idx]) if history_test_acc_per_digit else [0.0] * 10
     else:
         best_test_acc = 0.0
         best_test_epoch = 0
@@ -533,6 +570,7 @@ def train_model(
         final_train_acc = 0.0
         final_test_loss = 0.0
         final_test_acc = 0.0
+        final_test_acc_per_digit = [0.0] * 10
 
     model.weights = [model.asarray(weight.astype(np.float32, copy=False), dtype=xp.float32) for weight in best_weights_snapshot]
     model.biases = [model.asarray(bias.astype(np.float32, copy=False), dtype=xp.float32) for bias in best_biases_snapshot]
@@ -571,12 +609,14 @@ def train_model(
             "best_test_acc": float(best_test_acc),
             "best_test_epoch": int(best_test_epoch),
         },
+        "stopped_by_user": bool(stopped_by_user),
         "samples": {"total": int(len(y_train) + len(y_test)), "train": int(len(y_train)), "test": int(len(y_test))},
         "final_metrics": {
             "train_loss": final_train_loss,
             "train_acc": final_train_acc,
             "test_loss": final_test_loss,
             "test_acc": final_test_acc,
+            "test_acc_per_digit": final_test_acc_per_digit,
         },
         "training_time_seconds": float(training_time_seconds),
         "artifacts": {
@@ -642,20 +682,25 @@ def run_cli(
 class TrainingUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Training Konfiguration")
+        self.root.title("Training Konfiguration (CPU)")
         self.root.resizable(False, False)
 
         self.event_queue: Queue[tuple[str, dict[str, Any]]] = Queue()
         self.training_running = False
+        self.stop_training_event = threading.Event()
+        self.worker_thread: threading.Thread | None = None
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.size_var = tk.StringVar(value="normal")
         self.version_var = tk.StringVar(value="1")
-        self.learning_rate_var = tk.StringVar(value="")
         self.augment_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Bereit")
-
-        # Live-Plot Daten
-        self.history_data = {"epochs": [], "train_loss": [], "test_loss": [], "train_acc": [], "test_acc": []}
+        self.live_epoch_var = tk.StringVar(value="-")
+        self.live_train_loss_var = tk.StringVar(value="-")
+        self.live_train_acc_var = tk.StringVar(value="-")
+        self.live_test_loss_var = tk.StringVar(value="-")
+        self.live_test_acc_var = tk.StringVar(value="-")
+        self.live_test_acc_per_digit_var = tk.StringVar(value="-")
 
         self._build_ui()
         self._refresh_profile_label()
@@ -664,7 +709,7 @@ class TrainingUI:
         frame = ttk.Frame(self.root, padding=12)
         frame.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="Modellgrösse:").grid(row=0, column=0, sticky="w")
+        ttk.Label(frame, text="Modellgroesse:").grid(row=0, column=0, sticky="w")
         self.size_combo = ttk.Combobox(frame, textvariable=self.size_var, state="readonly", values=["mini", "normal", "pro"], width=12)
         self.size_combo.grid(row=0, column=1, sticky="w", padx=(8, 0))
         self.size_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_profile_label())
@@ -673,62 +718,54 @@ class TrainingUI:
         self.version_entry = ttk.Entry(frame, textvariable=self.version_var, width=14)
         self.version_entry.grid(row=1, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
 
-        ttk.Label(frame, text="Learning Rate:").grid(row=2, column=0, sticky="w", pady=(8, 0))
-        self.learning_rate_entry = ttk.Entry(frame, textvariable=self.learning_rate_var, width=14)
-        self.learning_rate_entry.grid(row=2, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
-
         self.augment_check = ttk.Checkbutton(frame, text="Data Augmentation", variable=self.augment_var)
-        self.augment_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.augment_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         self.profile_label = ttk.Label(frame, text="", justify="left")
-        self.profile_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.profile_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
 
         self.start_btn = ttk.Button(frame, text="Training starten", command=self.start_training)
-        self.start_btn.grid(row=5, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.start_btn.grid(row=4, column=0, sticky="we", pady=(10, 0), padx=(0, 4))
+        self.stop_btn = ttk.Button(frame, text="End Training Now", command=self.stop_training, state="disabled")
+        self.stop_btn.grid(row=4, column=1, sticky="we", pady=(10, 0), padx=(4, 0))
 
         self.progress = ttk.Progressbar(frame, mode="determinate", length=360)
-        self.progress.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        self.progress.grid(row=5, column=0, columnspan=2, sticky="we", pady=(10, 0))
+
+        metrics_frame = ttk.LabelFrame(frame, text="Live Metriken", padding=8)
+        metrics_frame.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        ttk.Label(metrics_frame, text="Epoch:").grid(row=0, column=0, sticky="w")
+        ttk.Label(metrics_frame, textvariable=self.live_epoch_var).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metrics_frame, text="Train Loss:").grid(row=1, column=0, sticky="w")
+        ttk.Label(metrics_frame, textvariable=self.live_train_loss_var).grid(row=1, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metrics_frame, text="Train Acc:").grid(row=2, column=0, sticky="w")
+        ttk.Label(metrics_frame, textvariable=self.live_train_acc_var).grid(row=2, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metrics_frame, text="Test Loss:").grid(row=3, column=0, sticky="w")
+        ttk.Label(metrics_frame, textvariable=self.live_test_loss_var).grid(row=3, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metrics_frame, text="Test Acc:").grid(row=4, column=0, sticky="w")
+        ttk.Label(metrics_frame, textvariable=self.live_test_acc_var).grid(row=4, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metrics_frame, text="Test Acc 0-9:").grid(row=5, column=0, sticky="nw")
+        ttk.Label(metrics_frame, textvariable=self.live_test_acc_per_digit_var, justify="left").grid(row=5, column=1, sticky="w", padx=(8, 0))
 
         self.log_text = tk.Text(frame, width=70, height=8, state="disabled")
-        self.log_text.grid(row=8, column=0, columnspan=2, sticky="we", pady=(10, 0))
-
-        # Live Plot Bereich
-        self.fig = mpl_fig.Figure(figsize=(7, 3), dpi=100)
-        self.ax_loss = self.fig.add_subplot(1, 2, 1)
-        self.ax_acc = self.fig.add_subplot(1, 2, 2)
-        self.fig.tight_layout(pad=3.0)
-
-        self._setup_axes()
-
-        self.canvas = FigureCanvasTkAgg(self.fig, master=frame)
-        self.canvas_widget = self.canvas.get_tk_widget()
-        self.canvas_widget.grid(row=9, column=0, columnspan=2, sticky="we", pady=(10, 0))
-
-    def _setup_axes(self) -> None:
-        self.ax_loss.clear()
-        self.ax_loss.set_title("Loss")
-        self.ax_loss.set_xlabel("Epoch")
-        self.ax_loss.set_ylim(0, 2.5)
-
-        self.ax_acc.clear()
-        self.ax_acc.set_title("Accuracy")
-        self.ax_acc.set_xlabel("Epoch")
-        self.ax_acc.set_ylim(0, 1.0)
+        self.log_text.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10, 0))
 
     def _refresh_profile_label(self) -> None:
-        size = self.size_var.get()
-        profile = MODEL_PROFILES[size]
-        default_lr = float(DEFAULT_ADAM_LEARNING_RATES[size])
-        self.learning_rate_var.set(f"{default_lr:.4f}")
+        profile = MODEL_PROFILES[self.size_var.get()]
         self.profile_label.config(
             text=(
                 f"Profile: hidden={int(profile['hidden_size'])}, "
                 f"layers={int(profile['hidden_layers'])}, "
                 f"epochs={int(profile['epochs'])}, "
                 f"batch={int(profile['batch_size'])}, "
-                f"optimizer=adam, default_lr={default_lr:.4f}"
+                "optimizer=adam"
             )
         )
+
+    def _format_per_digit_accuracy(self, values: list[float]) -> str:
+        first = "  ".join([f"{digit}:{(float(values[digit]) * 100.0):5.1f}%" for digit in range(5)])
+        second = "  ".join([f"{digit}:{(float(values[digit]) * 100.0):5.1f}%" for digit in range(5, 10)])
+        return first + "\n" + second
 
     def _append_log(self, message: str) -> None:
         self.log_text.config(state="normal")
@@ -749,23 +786,15 @@ class TrainingUI:
 
         size = self.size_var.get().strip().lower()
         if size not in MODEL_PROFILES:
-            messagebox.showerror("Fehler", "Ungültige Modellgrösse.")
-            return
-        learning_rate_raw = self.learning_rate_var.get().strip()
-        try:
-            learning_rate = float(learning_rate_raw)
-        except ValueError:
-            messagebox.showerror("Fehler", "Learning Rate muss eine Zahl sein.")
-            return
-        if learning_rate <= 0:
-            messagebox.showerror("Fehler", "Learning Rate muss > 0 sein.")
+            messagebox.showerror("Fehler", "Ungueltige Modellgroesse.")
             return
 
         self.training_running = True
+        self.stop_training_event.clear()
         self.start_btn.config(state="disabled")
+        self.stop_btn.config(state="normal")
         self.size_combo.config(state="disabled")
         self.version_entry.config(state="disabled")
-        self.learning_rate_entry.config(state="disabled")
         self.augment_check.config(state="disabled")
 
         epochs = int(MODEL_PROFILES[size]["epochs"])
@@ -773,26 +802,40 @@ class TrainingUI:
         self.progress["value"] = 0
         self.status_var.set("Training laeuft...")
         augment_enabled = bool(self.augment_var.get())
-        self._append_log(
-            f"Starte Training: size={size}, version={version}, lr={learning_rate}, "
-            f"augment={augment_enabled}, backend=cpu"
-        )
+        self._append_log(f"Starte Training: size={size}, version={version}, augment={augment_enabled}, backend=cpu")
 
-        # Reset Plot
-        for key in self.history_data:
-            self.history_data[key] = []
-        self._setup_axes()
-        self.canvas.draw()
-
-        thread = threading.Thread(
-            target=self._worker,
-            args=(size, version, learning_rate, augment_enabled),
-            daemon=True,
-        )
-        thread.start()
+        self.worker_thread = threading.Thread(target=self._worker, args=(size, version, augment_enabled), daemon=False)
+        self.worker_thread.start()
         self.root.after(150, self._poll_events)
 
-    def _worker(self, size: str, version: str, learning_rate: float, augment_enabled: bool) -> None:
+    def _on_close(self) -> None:
+        if self.training_running:
+            self.stop_training_event.set()
+            self.stop_btn.config(state="disabled")
+            self.status_var.set("Stop angefordert... Fenster schliesst nach Trainingsende.")
+            self._append_log("Fenster schliessen: Stop angefordert, warte auf sicheren Abbruch...")
+            self.root.after(150, self._wait_for_shutdown)
+            return
+        self.root.destroy()
+
+    def _wait_for_shutdown(self) -> None:
+        if self.training_running:
+            self.root.after(150, self._wait_for_shutdown)
+            return
+        if self.worker_thread is not None and self.worker_thread.is_alive():
+            self.root.after(150, self._wait_for_shutdown)
+            return
+        self.root.destroy()
+
+    def stop_training(self) -> None:
+        if not self.training_running:
+            return
+        self.stop_training_event.set()
+        self.stop_btn.config(state="disabled")
+        self.status_var.set("Stop angefordert...")
+        self._append_log("Manueller Stopp angefordert (End Training Now). Warte auf sicheren Abbruch...")
+
+    def _worker(self, size: str, version: str, augment_enabled: bool) -> None:
         def callback(event: str, data: dict[str, Any]) -> None:
             self.event_queue.put((event, data))
 
@@ -802,11 +845,11 @@ class TrainingUI:
                 version=version,
                 callback=callback,
                 early_stopping_patience=15,
-                learning_rate_override=learning_rate,
                 augment_enabled=augment_enabled,
+                stop_event=self.stop_training_event,
             )
             self.event_queue.put(("success", {"metadata": metadata}))
-        except Exception as exc:  # noqa: BLE001
+        except BaseException as exc:  # noqa: BLE001
             details = traceback.format_exc()
             self.event_queue.put(("error", {"message": str(exc), "traceback": details}))
 
@@ -829,46 +872,37 @@ class TrainingUI:
             elif event == "progress":
                 epoch = int(data.get("epoch", 0))
                 epochs = int(data.get("epochs", 1))
+                train_loss = float(data["train_loss"])
+                train_acc = float(data["train_acc"])
+                test_loss = float(data["test_loss"])
+                test_acc = float(data["test_acc"])
+                per_digit = [float(v) for v in data.get("test_acc_per_digit", [0.0] * 10)]
                 self.progress["value"] = epoch
                 msg = (
                     f"Epoch {epoch:02d}/{epochs} | "
-                    f"Train Loss: {float(data['train_loss']):.4f} | Train Acc: {float(data['train_acc']):.4f} | "
-                    f"Test Loss: {float(data['test_loss']):.4f} | Test Acc: {float(data['test_acc']):.4f}"
+                    f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
+                    f"Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f}"
                 )
                 self._append_log(msg)
                 self.status_var.set(f"Epoch {epoch}/{epochs}")
-
-                # Update Plot
-                self.history_data["epochs"].append(epoch)
-                self.history_data["train_loss"].append(float(data["train_loss"]))
-                self.history_data["test_loss"].append(float(data["test_loss"]))
-                self.history_data["train_acc"].append(float(data["train_acc"]))
-                self.history_data["test_acc"].append(float(data["test_acc"]))
-
-                self.ax_loss.clear()
-                self.ax_loss.set_title("Loss")
-                self.ax_loss.plot(self.history_data["epochs"], self.history_data["train_loss"], "b-", label="Train")
-                self.ax_loss.plot(self.history_data["epochs"], self.history_data["test_loss"], "r-", label="Test")
-                self.ax_loss.legend(fontsize="small")
-                self.ax_loss.set_ylim(0, max(2.5, max(self.history_data["train_loss"]) * 1.1 if self.history_data["train_loss"] else 2.5))
-
-                self.ax_acc.clear()
-                self.ax_acc.set_title("Accuracy")
-                self.ax_acc.plot(self.history_data["epochs"], self.history_data["train_acc"], "b-", label="Train")
-                self.ax_acc.plot(self.history_data["epochs"], self.history_data["test_acc"], "r-", label="Test")
-                self.ax_acc.legend(fontsize="small", loc="lower right")
-                self.ax_acc.set_ylim(0, 1.05)
-
-                self.fig.tight_layout(pad=3.0)
-                self.canvas.draw()
+                self.live_epoch_var.set(f"{epoch}/{epochs}")
+                self.live_train_loss_var.set(f"{train_loss:.4f}")
+                self.live_train_acc_var.set(f"{train_acc:.4f}")
+                self.live_test_loss_var.set(f"{test_loss:.4f}")
+                self.live_test_acc_var.set(f"{test_acc:.4f}")
+                self.live_test_acc_per_digit_var.set(self._format_per_digit_accuracy(per_digit))
             elif event == "success":
                 metadata = data.get("metadata", {})
                 final_metrics = metadata.get("final_metrics", {}) if isinstance(metadata, dict) else {}
+                stopped_by_user = bool(metadata.get("stopped_by_user", False)) if isinstance(metadata, dict) else False
                 final_acc = float(final_metrics.get("test_acc", 0.0))
                 self._append_log(f"Finale Test-Accuracy: {final_acc:.4f}")
-                self.status_var.set("Training abgeschlossen")
+                self.status_var.set("Training manuell beendet" if stopped_by_user else "Training abgeschlossen")
                 self._finish_training()
-                messagebox.showinfo("Fertig", f"Training abgeschlossen.\nFinale Test-Accuracy: {final_acc:.4f}")
+                if stopped_by_user:
+                    messagebox.showinfo("Beendet", f"Training manuell beendet.\nFinale Test-Accuracy: {final_acc:.4f}")
+                else:
+                    messagebox.showinfo("Fertig", f"Training abgeschlossen.\nFinale Test-Accuracy: {final_acc:.4f}")
                 keep_polling = False
             elif event == "error":
                 message = str(data.get("message", "Unbekannter Fehler"))
@@ -887,10 +921,12 @@ class TrainingUI:
     def _finish_training(self) -> None:
         self.training_running = False
         self.start_btn.config(state="normal")
+        self.stop_btn.config(state="disabled")
         self.size_combo.config(state="readonly")
         self.version_entry.config(state="normal")
-        self.learning_rate_entry.config(state="normal")
         self.augment_check.config(state="normal")
+        if self.worker_thread is not None and not self.worker_thread.is_alive():
+            self.worker_thread = None
 
 
 def run_ui() -> None:
@@ -922,3 +958,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

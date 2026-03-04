@@ -988,6 +988,8 @@ class OpenCLMLPTrainer:
 
         self.host_loss = np.empty((self.batch_size,), dtype=np.float32)
         self.host_correct = np.empty((self.batch_size,), dtype=np.int32)
+        self.host_logits = np.empty((self.batch_size, self.output_size), dtype=np.float32)
+        self.host_labels = np.empty((self.batch_size,), dtype=np.int32)
 
     def _k_matmul_bias_relu(
         self,
@@ -1484,6 +1486,51 @@ class OpenCLMLPTrainer:
             return 0.0, 0.0
         return total_loss / float(total_samples), total_correct / float(total_samples)
 
+    def evaluate_vram_with_per_class(self, x_eval_gpu: CLArray, y_eval_gpu: CLArray, num_classes: int = 10) -> tuple[float, float, list[float]]:
+        total_loss = 0.0
+        total_correct = 0
+        total_samples = int(x_eval_gpu.shape[0])
+        class_total = np.zeros((num_classes,), dtype=np.int64)
+        class_correct = np.zeros((num_classes,), dtype=np.int64)
+
+        eval_indices = np.arange(total_samples, dtype=np.int32)
+        indices_gpu = cl_array.empty(self.queue, (self.batch_size,), dtype=np.int32)
+
+        for start in range(0, total_samples, self.batch_size):
+            end = min(start + self.batch_size, total_samples)
+            m = end - start
+            if m <= 0:
+                continue
+
+            indices_gpu[:m].set(eval_indices[start:end], queue=self.queue)
+            self._k_gather_batch(x_eval_gpu, y_eval_gpu, indices_gpu, m)
+            self._forward(m)
+            self._k_softmax_metrics(m)
+
+            self.sample_loss.get(queue=self.queue, ary=self.host_loss)
+            self.sample_correct.get(queue=self.queue, ary=self.host_correct)
+            total_loss += float(np.sum(self.host_loss[:m], dtype=np.float64))
+            total_correct += int(np.sum(self.host_correct[:m], dtype=np.int64))
+
+            self.logits.get(queue=self.queue, ary=self.host_logits)
+            self.labels.get(queue=self.queue, ary=self.host_labels)
+            logits_np = self.host_logits[:m]
+            labels_np = self.host_labels[:m]
+            preds_np = np.argmax(logits_np, axis=1).astype(np.int32, copy=False)
+            for digit in range(num_classes):
+                mask = labels_np == digit
+                count = int(np.count_nonzero(mask))
+                if count == 0:
+                    continue
+                class_total[digit] += count
+                class_correct[digit] += int(np.count_nonzero(preds_np[mask] == digit))
+
+        if total_samples <= 0:
+            return 0.0, 0.0, [0.0] * num_classes
+
+        per_digit = [float(class_correct[d]) / float(class_total[d]) if class_total[d] > 0 else 0.0 for d in range(num_classes)]
+        return total_loss / float(total_samples), total_correct / float(total_samples), per_digit
+
     def export_weights(self) -> tuple[list[np.ndarray], list[np.ndarray]]:
         weights: list[np.ndarray] = []
         biases: list[np.ndarray] = []
@@ -1674,12 +1721,14 @@ def train_model_gpu(
     _emit(callback, "start", epochs=epochs)
 
     history = {"train_loss": [], "train_acc": [], "test_loss": [], "test_acc": []}
+    history_test_acc_per_digit: list[list[float]] = []
     rng = np.random.default_rng(seed)
     early_stopping_enabled = early_stopping_patience > 0
     best_test_acc = float("-inf")
     best_test_epoch = 0
     best_weights_snapshot: list[np.ndarray] | None = None
     best_biases_snapshot: list[np.ndarray] | None = None
+    last_test_acc_per_digit = [0.0] * 10
     epochs_without_improvement = 0
     stopped_early = False
     stopped_by_user = False
@@ -1769,7 +1818,7 @@ def train_model_gpu(
 
         should_eval_test = (epoch == 1) or (epoch % test_eval_interval == 0) or (epoch == epochs)
         if should_eval_test:
-            test_loss, test_acc = trainer.evaluate_vram(x_test_gpu, y_test_gpu)
+            test_loss, test_acc, last_test_acc_per_digit = trainer.evaluate_vram_with_per_class(x_test_gpu, y_test_gpu, num_classes=10)
         else:
             test_loss = float(history["test_loss"][-1]) if history["test_loss"] else 0.0
             test_acc = float(history["test_acc"][-1]) if history["test_acc"] else 0.0
@@ -1778,6 +1827,7 @@ def train_model_gpu(
         history["train_acc"].append(train_acc)
         history["test_loss"].append(test_loss)
         history["test_acc"].append(test_acc)
+        history_test_acc_per_digit.append(list(last_test_acc_per_digit))
 
         _emit(
             callback,
@@ -1788,6 +1838,7 @@ def train_model_gpu(
             train_acc=train_acc,
             test_loss=test_loss,
             test_acc=test_acc,
+            test_acc_per_digit=list(last_test_acc_per_digit),
         )
 
         if should_eval_test:
@@ -1828,6 +1879,7 @@ def train_model_gpu(
             "train_acc": float(history["train_acc"][best_metrics_idx]),
             "test_loss": float(history["test_loss"][best_metrics_idx]),
             "test_acc": float(history["test_acc"][best_metrics_idx]),
+            "test_acc_per_digit": list(history_test_acc_per_digit[best_metrics_idx]) if history_test_acc_per_digit else [0.0] * 10,
         }
     else:
         best_test_acc = 0.0
@@ -1837,6 +1889,7 @@ def train_model_gpu(
             "train_acc": 0.0,
             "test_loss": 0.0,
             "test_acc": 0.0,
+            "test_acc_per_digit": [0.0] * 10,
         }
 
     if best_weights_snapshot is None or best_biases_snapshot is None:
@@ -1966,6 +2019,7 @@ class TrainingUI:
         self.live_train_acc_var = tk.StringVar(value="-")
         self.live_test_loss_var = tk.StringVar(value="-")
         self.live_test_acc_var = tk.StringVar(value="-")
+        self.live_test_acc_per_digit_var = tk.StringVar(value="-")
 
         self._build_ui()
         self._refresh_profile_label()
@@ -2009,6 +2063,8 @@ class TrainingUI:
         ttk.Label(metrics_frame, textvariable=self.live_test_loss_var).grid(row=3, column=1, sticky="w", padx=(8, 0))
         ttk.Label(metrics_frame, text="Test Acc:").grid(row=4, column=0, sticky="w")
         ttk.Label(metrics_frame, textvariable=self.live_test_acc_var).grid(row=4, column=1, sticky="w", padx=(8, 0))
+        ttk.Label(metrics_frame, text="Test Acc 0-9:").grid(row=5, column=0, sticky="nw")
+        ttk.Label(metrics_frame, textvariable=self.live_test_acc_per_digit_var, justify="left").grid(row=5, column=1, sticky="w", padx=(8, 0))
 
         self.log_text = tk.Text(frame, width=70, height=8, state="disabled")
         self.log_text.grid(row=7, column=0, columnspan=2, sticky="we", pady=(10, 0))
@@ -2030,6 +2086,11 @@ class TrainingUI:
         self.log_text.insert("end", message + "\n")
         self.log_text.see("end")
         self.log_text.config(state="disabled")
+
+    def _format_per_digit_accuracy(self, values: list[float]) -> str:
+        first = "  ".join([f"{digit}:{(float(values[digit]) * 100.0):5.1f}%" for digit in range(5)])
+        second = "  ".join([f"{digit}:{(float(values[digit]) * 100.0):5.1f}%" for digit in range(5, 10)])
+        return first + "\n" + second
 
     def start_training(self) -> None:
         if self.training_running:
@@ -2139,6 +2200,7 @@ class TrainingUI:
                 train_acc = float(data["train_acc"])
                 test_loss = float(data["test_loss"])
                 test_acc = float(data["test_acc"])
+                per_digit = [float(v) for v in data.get("test_acc_per_digit", [0.0] * 10)]
                 self.progress["value"] = epoch
                 msg = (
                     f"Epoch {epoch:02d}/{epochs} | "
@@ -2152,6 +2214,7 @@ class TrainingUI:
                 self.live_train_acc_var.set(f"{train_acc:.4f}")
                 self.live_test_loss_var.set(f"{test_loss:.4f}")
                 self.live_test_acc_var.set(f"{test_acc:.4f}")
+                self.live_test_acc_per_digit_var.set(self._format_per_digit_accuracy(per_digit))
             elif event == "success":
                 metadata = data.get("metadata", {})
                 final_metrics = metadata.get("final_metrics", {}) if isinstance(metadata, dict) else {}
