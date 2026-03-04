@@ -1,0 +1,65 @@
+{
+  "model_name": "TCM-o5.2-mini",
+  "created_at": "2026-03-04T12:29:30",
+  "train_data_dir": "C:\\Users\\gesom\\github\\TCM_AI\\data\\training",
+  "test_data_dir": "C:\\Users\\gesom\\github\\TCM_AI\\data\\testing",
+  "size": "mini",
+  "hidden_size": 256,
+  "hidden_layers": 2,
+  "epochs": 96,
+  "epochs_trained": 41,
+  "batch_size": 512,
+  "effective_batch_size": 512,
+  "test_eval_interval": 1,
+  "optimizer": "adam",
+  "learning_rate": 0.0015,
+  "parameters": {
+    "total": 269322,
+    "human": "269.3K"
+  },
+  "seed": 42,
+  "compute_backend": "cpu",
+  "augmentation": {
+    "enabled": true,
+    "probability": 0.7,
+    "max_shift": 2,
+    "max_rotation": 10.0
+  },
+  "early_stopping": {
+    "enabled": true,
+    "patience": 15,
+    "stopped_early": false,
+    "best_test_acc": 0.99468,
+    "best_test_epoch": 38
+  },
+  "stopped_by_user": true,
+  "samples": {
+    "total": 350000,
+    "train": 300000,
+    "test": 50000
+  },
+  "final_metrics": {
+    "train_loss": 0.020807262270078827,
+    "train_acc": 0.9935666862201364,
+    "test_loss": 0.020409472286701202,
+    "test_acc": 0.99468,
+    "test_acc_per_digit": [
+      0.9971887550200803,
+      0.9962999026290166,
+      0.9960254372019078,
+      0.9948103792415169,
+      0.9911682055399438,
+      0.9934587080948487,
+      0.9967728922952803,
+      0.9948289578361177,
+      0.9919581825492562,
+      0.9942104212417648
+    ]
+  },
+  "training_time_seconds": 841.1491572000086,
+  "artifacts": {
+    "model_file": "C:\\Users\\gesom\\github\\TCM_AI\\models\\TCM-o5.2-mini.npz",
+    "plot_file": "C:\\Users\\gesom\\github\\TCM_AI\\models\\TCM-o5.2-mini_training.png",
+    "metadata_file": "C:\\Users\\gesom\\github\\TCM_AI\\models\\TCM-o5.2-mini.json"
+  }
+}

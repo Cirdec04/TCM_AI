@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+import re
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -14,6 +15,52 @@ from nn import SimpleMLP
 
 BASE_DIR = Path(__file__).resolve().parent
 MODELS_DIR = BASE_DIR / "models"
+MODEL_NAME_RE = re.compile(r"^TCM-o(?P<version>\d+(?:\.\d+)*)(?:-(?P<tier>[a-z0-9]+))?\.npz$", re.IGNORECASE)
+MODEL_TIER_SORT_ORDER = {"normal": 0, "mini": 1, "pro": 2}
+MODEL_TIER_DEFAULT_ORDER = {"normal": 0, "pro": 1, "mini": 2}
+
+
+def _parse_model_name(model_name: str) -> tuple[bool, tuple[int, ...], str]:
+    match = MODEL_NAME_RE.fullmatch(model_name)
+    if not match:
+        return False, tuple(), ""
+
+    version = tuple(int(part) for part in match.group("version").split("."))
+    tier = (match.group("tier") or "normal").lower()
+    return True, version, tier
+
+
+def _model_sort_key(model_name: str) -> tuple[int, tuple[int, ...], int, str]:
+    is_valid, version, tier = _parse_model_name(model_name)
+    if not is_valid:
+        return 1, tuple(), 99, model_name.lower()
+    return 0, version, MODEL_TIER_SORT_ORDER.get(tier, 99), model_name.lower()
+
+
+def _pick_default_model(model_files: list[str]) -> str:
+    parsed_models: list[tuple[str, bool, tuple[int, ...], str]] = [
+        (name, *_parse_model_name(name)) for name in model_files
+    ]
+    valid_models = [entry for entry in parsed_models if entry[1]]
+    if not valid_models:
+        return model_files[-1]
+
+    normal_models = [entry for entry in valid_models if entry[3] == "normal"]
+    if normal_models:
+        latest_normal_version = max(entry[2] for entry in normal_models)
+        latest_normals = [entry for entry in normal_models if entry[2] == latest_normal_version]
+        latest_normals.sort(key=lambda entry: entry[0].lower())
+        return latest_normals[0][0]
+
+    latest_version = max(entry[2] for entry in valid_models)
+    latest_models = [entry for entry in valid_models if entry[2] == latest_version]
+    latest_models.sort(
+        key=lambda entry: (
+            MODEL_TIER_DEFAULT_ORDER.get(entry[3], 99),
+            entry[0].lower(),
+        )
+    )
+    return latest_models[0][0]
 
 
 class DigitApp:
@@ -115,7 +162,7 @@ class DigitApp:
 
     def refresh_model_list(self) -> None:
         self.models_dir.mkdir(parents=True, exist_ok=True)
-        model_files = sorted([p.name for p in self.models_dir.glob("TCM-o*.npz")])
+        model_files = sorted((p.name for p in self.models_dir.glob("TCM-o*.npz")), key=_model_sort_key)
         self.model_combo["values"] = model_files
 
         if not model_files:
@@ -130,7 +177,7 @@ class DigitApp:
         self.loaded_models = {name: model for name, model in self.loaded_models.items() if name in model_files}
 
         if self.model_var.get() not in model_files:
-            self.model_var.set(model_files[-1])
+            self.model_var.set(_pick_default_model(model_files))
 
         self.load_selected_model()
         self.update_prediction(silent=True)

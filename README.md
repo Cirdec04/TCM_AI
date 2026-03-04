@@ -151,6 +151,7 @@ Notiz zu `TCM-o4.1`:
 | `TCM-o5.1-mini` | 300'000 / 50'000 | 256    | 2 | 269.3K | 44     | 512   | Adam | 0.9936 |
 | `TCM-o5.1`      | 300'000 / 50'000 | 512    | 2 | 669.7K | 40     | 512   | Adam | 0.9938 |
 | `TCM-o5.1-pro`  | 300'000 / 50'000 | 2048   | 3 | 10.02M | 22     | 512   | Adam | 0.9937 |
+| `TCM-o5.2-mini` | 300'000 / 50'000 | 256    | 2 | 269.3K | 41     | 512   | Adam | 0.9947 |
 
 Notiz zu `TCM-o5-pro`:
 Benchmark zeigt es schlechter an als es sich anfühlt. Beim ausprobieren war es merkbar besser als o5.
