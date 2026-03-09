@@ -50,7 +50,15 @@ class DataCollectorUI:
                 (split_root / str(digit)).mkdir(parents=True, exist_ok=True)
 
     def _build_ui(self) -> None:
-        top = ttk.Frame(self.root, padding=10)
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(fill="both", expand=True)
+
+        collector_tab = ttk.Frame(notebook, padding=0)
+        stats_tab = ttk.Frame(notebook, padding=10)
+        notebook.add(collector_tab, text="Sammeln")
+        notebook.add(stats_tab, text="Stats")
+
+        top = ttk.Frame(collector_tab, padding=10)
         top.pack(fill="x")
 
         ttk.Label(top, text="Label:").pack(side="left")
@@ -70,7 +78,7 @@ class DataCollectorUI:
         )
         ratio_spin.pack(side="left", padx=(6, 0))
 
-        canvas_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
+        canvas_frame = ttk.Frame(collector_tab, padding=(10, 0, 10, 10))
         canvas_frame.pack()
         self.canvas = tk.Canvas(canvas_frame, width=self.canvas_size, height=self.canvas_size, bg="black", highlightthickness=1)
         self.canvas.pack()
@@ -85,16 +93,23 @@ class DataCollectorUI:
             text=f"28x28 Raster (Zoom x{self.display_scale}) | Links: zeichnen | Rechts: radieren",
         ).pack(pady=(6, 0))
 
-        buttons = ttk.Frame(self.root, padding=(10, 0, 10, 0))
+        buttons = ttk.Frame(collector_tab, padding=(10, 0, 10, 0))
         buttons.pack(fill="x")
         ttk.Button(buttons, text="Speichern", command=self.save_sample).pack(side="left")
         ttk.Button(buttons, text="Loeschen", command=self.clear_canvas).pack(side="left", padx=(8, 0))
         ttk.Button(buttons, text="Counts aktualisieren", command=self._refresh_counts).pack(side="left", padx=(8, 0))
 
-        info = ttk.Frame(self.root, padding=(10, 8, 10, 10))
+        info = ttk.Frame(collector_tab, padding=(10, 8, 10, 10))
         info.pack(fill="x")
         ttk.Label(info, textvariable=self.status_var, justify="left").pack(anchor="w")
-        ttk.Label(info, textvariable=self.counts_var, justify="left").pack(anchor="w", pady=(6, 0))
+
+        ttk.Label(
+            stats_tab,
+            text="Custom-Dataset-Statistiken",
+            font=("TkDefaultFont", 10, "bold"),
+            justify="left",
+        ).pack(anchor="w")
+        ttk.Label(stats_tab, textvariable=self.counts_var, justify="left").pack(anchor="w", pady=(8, 0))
 
         self.root.bind("<Return>", lambda _e: self.save_sample())
         self.root.bind("<Escape>", lambda _e: self.clear_canvas())
@@ -166,14 +181,30 @@ class DataCollectorUI:
             digit = 0
             self.digit_var.set("0")
 
-        train_digit = self._count_split_digit(CUSTOM_TRAIN_DIR, digit)
-        test_digit = self._count_split_digit(CUSTOM_TEST_DIR, digit)
-        train_total = sum(self._count_split_digit(CUSTOM_TRAIN_DIR, d) for d in range(10))
-        test_total = sum(self._count_split_digit(CUSTOM_TEST_DIR, d) for d in range(10))
+        per_digit_lines: list[str] = []
+        train_total = 0
+        test_total = 0
+        selected_train = 0
+        selected_test = 0
+
+        for current_digit in range(10):
+            train_count = self._count_split_digit(CUSTOM_TRAIN_DIR, current_digit)
+            test_count = self._count_split_digit(CUSTOM_TEST_DIR, current_digit)
+            digit_total = train_count + test_count
+            per_digit_lines.append(
+                f"{current_digit}: train={train_count}, test={test_count}, total={digit_total}"
+            )
+            train_total += train_count
+            test_total += test_count
+            if current_digit == digit:
+                selected_train = train_count
+                selected_test = test_count
+
         total = train_total + test_total
         self.counts_var.set(
-            f"Digit {digit}: train={train_digit}, test={test_digit}\n"
-            f"Gesamt custom: train={train_total}, test={test_total}, total={total}\n"
+            f"Ausgewaehlt ({digit}): train={selected_train}, test={selected_test}, total={selected_train + selected_test}\n"
+            f"Gesamt custom: train={train_total}, test={test_total}, total={total}\n\n"
+            f"Pro Ziffer:\n" + "\n".join(per_digit_lines) + "\n\n"
             f"Pfad: {CUSTOM_DATA_DIR}"
         )
 
