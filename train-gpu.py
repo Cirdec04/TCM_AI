@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import argparse
 import json
 import re
@@ -7,6 +8,7 @@ import threading
 import tkinter as tk
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -61,6 +63,8 @@ DATA_DIR = BASE_DIR / "data"
 TRAIN_DATA_DIR = DATA_DIR / "training"
 TEST_DATA_DIR = DATA_DIR / "testing"
 MODELS_DIR = BASE_DIR / "models"
+DATASET_LOAD_CHUNK_SIZE = 1024
+MAX_DATASET_LOAD_WORKERS = 8
 
 MODEL_PROFILES = {
     "mini": {
@@ -716,8 +720,23 @@ def _rotate_nearest_zero_fill(image: np.ndarray, angle_deg: float) -> np.ndarray
 
 def _load_image_as_vector(path: Path) -> np.ndarray:
     pixels = _to_grayscale_unit(_imread_image(path))
-    pixels = _resize_nearest(pixels, width=28, height=28)
+    if pixels.shape != (28, 28):
+        pixels = _resize_nearest(pixels, width=28, height=28)
     return pixels.reshape(-1)
+
+
+def _iter_chunks(items: list[tuple[int, Path]], chunk_size: int):
+    for start in range(0, len(items), chunk_size):
+        yield items[start:start + chunk_size]
+
+
+def _load_image_records(records: list[tuple[int, Path]]) -> tuple[np.ndarray, np.ndarray]:
+    x_chunk = np.empty((len(records), 28 * 28), dtype=np.float32)
+    y_chunk = np.empty((len(records),), dtype=np.int32)
+    for index, (digit_label, file_path) in enumerate(records):
+        x_chunk[index] = _load_image_as_vector(file_path)
+        y_chunk[index] = digit_label
+    return x_chunk, y_chunk
 
 
 def load_dataset_from_folders(
@@ -726,8 +745,6 @@ def load_dataset_from_folders(
     callback: ProgressCallback | None = None,
     progress_every: int = 1000,
 ) -> tuple[np.ndarray, np.ndarray]:
-    features: list[np.ndarray] = []
-    labels: list[int] = []
     files_with_labels: list[tuple[int, Path]] = []
 
     for class_label in range(10):
@@ -740,14 +757,27 @@ def load_dataset_from_folders(
 
     total_files = len(files_with_labels)
     _emit(callback, "info", message=f"{dataset_label}: {total_files} Dateien gefunden.")
-    for idx, (digit_label, file_path) in enumerate(files_with_labels, start=1):
-        features.append(_load_image_as_vector(file_path))
-        labels.append(digit_label)
-        if idx == 1 or idx % progress_every == 0 or idx == total_files:
-            _emit(callback, "info", message=f"{dataset_label}: {idx}/{total_files} geladen.")
 
-    x = np.vstack(features).astype(np.float32)
-    y = np.array(labels, dtype=np.int32)
+    x = np.empty((total_files, 28 * 28), dtype=np.float32)
+    y = np.empty((total_files,), dtype=np.int32)
+
+    worker_count = min(MAX_DATASET_LOAD_WORKERS, max(1, os.cpu_count() or 1))
+    loaded = 0
+    next_progress = 1
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        for x_chunk, y_chunk in executor.map(_load_image_records, _iter_chunks(files_with_labels, DATASET_LOAD_CHUNK_SIZE)):
+            chunk_size = int(y_chunk.shape[0])
+            end = loaded + chunk_size
+            x[loaded:end] = x_chunk
+            y[loaded:end] = y_chunk
+            loaded = end
+
+            if loaded == total_files or loaded >= next_progress:
+                _emit(callback, "info", message=f"{dataset_label}: {loaded}/{total_files} geladen.")
+                while next_progress <= loaded:
+                    next_progress += progress_every
+
     return x, y
 
 
