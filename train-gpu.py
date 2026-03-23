@@ -60,9 +60,6 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 TRAIN_DATA_DIR = DATA_DIR / "training"
 TEST_DATA_DIR = DATA_DIR / "testing"
-CUSTOM_DATA_DIR = DATA_DIR / "custom"
-CUSTOM_TRAIN_DATA_DIR = CUSTOM_DATA_DIR / "training"
-CUSTOM_TEST_DATA_DIR = CUSTOM_DATA_DIR / "testing"
 MODELS_DIR = BASE_DIR / "models"
 
 MODEL_PROFILES = {
@@ -651,11 +648,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--aug-shift", type=int, default=2, help="Maximaler Pixel-Shift in x/y Richtung.")
     parser.add_argument("--aug-rot", type=float, default=10.0, help="Maximaler Rotationswinkel in Grad.")
-    parser.add_argument(
-        "--use-custom-data",
-        action="store_true",
-        help="Mischt zusaetzlich Samples aus data/custom/training und data/custom/testing bei.",
-    )
     parser.add_argument("--no-fast-math", action="store_true", help="Deaktiviert OpenCL fast math Build-Optionen.")
     parser.add_argument("--no-ui", action="store_true", help="Kein GUI, direkt im Terminal trainieren.")
     return parser.parse_args()
@@ -1680,7 +1672,6 @@ def train_model_gpu(
     aug_prob: float = 0.7,
     aug_shift: int = 2,
     aug_rot: float = 10.0,
-    use_custom_data: bool = False,
     stop_event: threading.Event | None = None,
     callback: ProgressCallback | None = None,
 ) -> dict[str, object]:
@@ -1741,45 +1732,6 @@ def train_model_gpu(
     _emit(callback, "info", message=f"Lade Testdaten aus: {TEST_DATA_DIR}")
     x_test, y_test = load_dataset_from_folders(TEST_DATA_DIR, dataset_label="Testing", callback=callback)
     _emit(callback, "info", message=f"Geladene Test-Samples: {len(y_test)}")
-    custom_train_added = 0
-    custom_test_added = 0
-    if use_custom_data:
-        custom_train_count = count_images_in_dataset(CUSTOM_TRAIN_DATA_DIR)
-        custom_test_count = count_images_in_dataset(CUSTOM_TEST_DATA_DIR)
-        _emit(
-            callback,
-            "info",
-            message=(
-                f"Custom-Daten aktiv: train={custom_train_count} aus {CUSTOM_TRAIN_DATA_DIR}, "
-                f"test={custom_test_count} aus {CUSTOM_TEST_DATA_DIR}"
-            ),
-        )
-        if custom_train_count > 0:
-            x_custom_train, y_custom_train = load_dataset_from_folders(
-                CUSTOM_TRAIN_DATA_DIR,
-                dataset_label="Custom Training",
-                callback=callback,
-            )
-            x_train = np.concatenate((x_train, x_custom_train), axis=0)
-            y_train = np.concatenate((y_train, y_custom_train), axis=0)
-            custom_train_added = int(len(y_custom_train))
-        if custom_test_count > 0:
-            x_custom_test, y_custom_test = load_dataset_from_folders(
-                CUSTOM_TEST_DATA_DIR,
-                dataset_label="Custom Testing",
-                callback=callback,
-            )
-            x_test = np.concatenate((x_test, x_custom_test), axis=0)
-            y_test = np.concatenate((y_test, y_custom_test), axis=0)
-            custom_test_added = int(len(y_custom_test))
-        _emit(
-            callback,
-            "info",
-            message=(
-                f"Effektive Samples nach Merge: train={len(y_train)} "
-                f"(+{custom_train_added}), test={len(y_test)} (+{custom_test_added})"
-            ),
-        )
 
     layer_sizes = [28 * 28] + [hidden_size] * hidden_layers + [10]
     parameter_total = count_parameters(layer_sizes)
@@ -1809,8 +1761,7 @@ def train_model_gpu(
             f"batch_size={base_batch_size}, effective_batch_size={effective_batch_size}, "
             f"optimizer=adam, learning_rate={base_learning_rate}, seed={seed}, fast_math={fast_math}, "
             f"early_stopping_patience={early_stopping_patience}, "
-            f"augmentation={augment_enabled} (prob={aug_prob}, shift={aug_shift}, rot={aug_rot}), "
-            f"use_custom_data={use_custom_data}"
+            f"augmentation={augment_enabled} (prob={aug_prob}, shift={aug_shift}, rot={aug_rot})"
         ),
     )
 
@@ -2012,11 +1963,6 @@ def train_model_gpu(
             "human": format_parameter_count(parameter_total),
         },
         "seed": seed,
-        "custom_data": {
-            "enabled": bool(use_custom_data),
-            "train_samples_added": int(custom_train_added),
-            "test_samples_added": int(custom_test_added),
-        },
         "augmentation": {
             "enabled": bool(augment_enabled),
             "probability": float(aug_prob),
@@ -2095,7 +2041,6 @@ def run_cli(args: argparse.Namespace) -> None:
         aug_prob=args.aug_prob,
         aug_shift=args.aug_shift,
         aug_rot=args.aug_rot,
-        use_custom_data=args.use_custom_data,
         callback=callback,
     )
     final_acc = float((metadata.get("final_metrics", {}) or {}).get("test_acc", 0.0))
@@ -2117,7 +2062,6 @@ class TrainingUI:
         self.size_var = tk.StringVar(value="normal")
         self.version_var = tk.StringVar(value="1")
         self.augment_var = tk.BooleanVar(value=False)
-        self.use_custom_data_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Bereit")
         self.live_epoch_var = tk.StringVar(value="-")
         self.live_train_loss_var = tk.StringVar(value="-")
@@ -2144,12 +2088,6 @@ class TrainingUI:
 
         self.augment_check = ttk.Checkbutton(frame, text="Data Augmentation", variable=self.augment_var)
         self.augment_check.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        self.custom_data_check = ttk.Checkbutton(
-            frame,
-            text="Custom Data aus data/custom nutzen",
-            variable=self.use_custom_data_var,
-        )
-        self.custom_data_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         self.profile_label = ttk.Label(frame, text="", justify="left")
         self.profile_label.grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
@@ -2226,22 +2164,19 @@ class TrainingUI:
         self.size_combo.config(state="disabled")
         self.version_entry.config(state="disabled")
         self.augment_check.config(state="disabled")
-        self.custom_data_check.config(state="disabled")
 
         epochs = int(MODEL_PROFILES[size]["epochs"])
         self.progress["maximum"] = epochs
         self.progress["value"] = 0
         self.status_var.set("Training laeuft...")
         augment_enabled = bool(self.augment_var.get())
-        use_custom_data = bool(self.use_custom_data_var.get())
         self._append_log(
-            f"Starte Training: size={size}, version={version}, augment={augment_enabled}, "
-            f"use_custom_data={use_custom_data}, backend=gpu"
+            f"Starte Training: size={size}, version={version}, augment={augment_enabled}, backend=gpu"
         )
 
         self.worker_thread = threading.Thread(
             target=self._worker,
-            args=(size, version, augment_enabled, use_custom_data),
+            args=(size, version, augment_enabled),
             daemon=False,
         )
         self.worker_thread.start()
@@ -2274,7 +2209,7 @@ class TrainingUI:
         self.status_var.set("Stop angefordert...")
         self._append_log("Manueller Stopp angefordert (End Training Now). Warte auf sicheren Abbruch...")
 
-    def _worker(self, size: str, version: str, augment_enabled: bool, use_custom_data: bool) -> None:
+    def _worker(self, size: str, version: str, augment_enabled: bool) -> None:
         def callback(event: str, data: dict[str, Any]) -> None:
             self.event_queue.put((event, data))
 
@@ -2290,7 +2225,6 @@ class TrainingUI:
                 early_stopping_patience=15,
                 learning_rate_override=None,
                 augment_enabled=augment_enabled,
-                use_custom_data=use_custom_data,
                 stop_event=self.stop_training_event,
                 callback=callback,
             )
@@ -2371,7 +2305,6 @@ class TrainingUI:
         self.size_combo.config(state="readonly")
         self.version_entry.config(state="normal")
         self.augment_check.config(state="normal")
-        self.custom_data_check.config(state="normal")
         if self.worker_thread is not None and not self.worker_thread.is_alive():
             self.worker_thread = None
 
