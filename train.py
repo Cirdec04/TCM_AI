@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
 from tkinter import messagebox, ttk
+from collections.abc import Iterator
 from typing import Any, Callable
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -20,11 +21,11 @@ import matplotlib.figure as mpl_fig
 
 from deps import ensure_requirements_installed
 
-ensure_requirements_installed(required_modules=("numpy", "matplotlib"))
+ensure_requirements_installed(required_modules=("numpy", "matplotlib", "PIL"))
 
 import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
 import numpy as np
+from PIL import Image
 
 from nn import SimpleMLP
 
@@ -154,14 +155,14 @@ def _rotate_nearest_zero_fill(image: np.ndarray, angle_deg: float) -> np.ndarray
 
 
 def _load_image_as_vector(path: Path) -> np.ndarray:
-    pixels_raw = mpimg.imread(path)
-    pixels = _to_grayscale_unit(np.asarray(pixels_raw))
+    with Image.open(path) as img:
+        pixels = _to_grayscale_unit(np.asarray(img.convert("L")))
     if pixels.shape != (28, 28):
         pixels = _resize_nearest(pixels, width=28, height=28)
     return pixels.reshape(-1)
 
 
-def _iter_chunks(items: list[tuple[int, Path]], chunk_size: int) -> list[tuple[int, Path]]:
+def _iter_chunks(items: list[tuple[int, Path]], chunk_size: int) -> Iterator[list[tuple[int, Path]]]:
     for start in range(0, len(items), chunk_size):
         yield items[start:start + chunk_size]
 

@@ -9,6 +9,7 @@ import tkinter as tk
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -18,14 +19,14 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from deps import ensure_requirements_installed
 
-ensure_requirements_installed(required_modules=("numpy", "matplotlib"))
+ensure_requirements_installed(required_modules=("numpy", "matplotlib", "PIL"))
 
 import numpy as np
+from PIL import Image
 
 cl = None
 cl_array = None
 _plt = None
-_mpimg = None
 
 if TYPE_CHECKING:
     import pyopencl as _cl_types
@@ -114,12 +115,8 @@ def _get_pyplot() -> Any:
 
 
 def _imread_image(path: Path) -> np.ndarray:
-    global _mpimg
-    if _mpimg is None:
-        import matplotlib.image as mpimg
-
-        _mpimg = mpimg
-    return np.asarray(_mpimg.imread(path))
+    with Image.open(path) as img:
+        return np.asarray(img.convert("L"))
 
 
 OPENCL_KERNELS = r"""
@@ -725,7 +722,7 @@ def _load_image_as_vector(path: Path) -> np.ndarray:
     return pixels.reshape(-1)
 
 
-def _iter_chunks(items: list[tuple[int, Path]], chunk_size: int):
+def _iter_chunks(items: list[tuple[int, Path]], chunk_size: int) -> Iterator[list[tuple[int, Path]]]:
     for start in range(0, len(items), chunk_size):
         yield items[start:start + chunk_size]
 
