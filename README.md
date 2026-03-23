@@ -176,12 +176,3 @@ Notiz zu `TCM-o5.2-Familie`:
 Data Augmentation aggressiver
 und LR-Scheduler eingebaut
 
-### Familie `TCM-o6` (MNIST Full + EMNIST Digits + Custom Data + Augmentation)
-
-- Daten: Kombiniertes Set aus MNIST Full + EMNIST Digits + eigene Daten (~351'999 total).
-
-| Modell          | Daten (Train/Test)     | hidden | hidden layers | parameters | epochs | batch size | Learning Rate | finale Test-Accuracy |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `TCM-o6-mini`   | 301'619 / 50'380       | 256    | 2 | 269.3K | 63     | 512   | 0.0015 | 0.9947          |
-
-=> Unsere schlechten daten haben das Modell verschlechtert

@@ -34,6 +34,7 @@ class SimpleMLP:
         input_size: int = 28 * 28,
         hidden_size: int = 128,
         hidden_layers: int = 1,
+        hidden_sizes: list[int] | None = None,
         output_size: int = 10,
         seed: int = 42,
         backend: str = "cpu",
@@ -43,11 +44,18 @@ class SimpleMLP:
 
         rng = np.random.default_rng(seed)
         self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.hidden_layers = max(1, int(hidden_layers))
         self.output_size = output_size
 
-        layer_sizes = [self.input_size] + [self.hidden_size] * self.hidden_layers + [self.output_size]
+        if hidden_sizes is not None:
+            self.hidden_sizes = list(hidden_sizes)
+            self.hidden_layers = len(self.hidden_sizes)
+            self.hidden_size = self.hidden_sizes[0]
+            layer_sizes = [self.input_size] + self.hidden_sizes + [self.output_size]
+        else:
+            self.hidden_layers = max(1, int(hidden_layers))
+            self.hidden_size = int(hidden_size)
+            self.hidden_sizes = [self.hidden_size] * self.hidden_layers
+            layer_sizes = [self.input_size] + [self.hidden_size] * self.hidden_layers + [self.output_size]
         self.layer_sizes = layer_sizes
 
         self.weights: list[np.ndarray] = []
@@ -216,6 +224,7 @@ class SimpleMLP:
             "input_size": self.input_size,
             "hidden_size": self.hidden_size,
             "hidden_layers": self.hidden_layers,
+            "hidden_sizes": np.array(self.hidden_sizes, dtype=np.int32),
             "output_size": self.output_size,
             "layer_sizes": np.array(self.layer_sizes, dtype=np.int32),
             "metadata": json.dumps(metadata),
@@ -231,14 +240,20 @@ class SimpleMLP:
         with np.load(source, allow_pickle=False) as data:
             keys = set(data.files)
             input_size = int(data["input_size"])
-            hidden_size = int(data["hidden_size"])
             output_size = int(data["output_size"])
-            hidden_layers = int(data["hidden_layers"]) if "hidden_layers" in keys else 1
+            
+            hidden_sizes = None
+            if "hidden_sizes" in keys:
+                hidden_sizes = [int(x) for x in data["hidden_sizes"].tolist()]
+            
+            hidden_size = int(data["hidden_size"]) if hidden_sizes is None else hidden_sizes[0]
+            hidden_layers = len(hidden_sizes) if hidden_sizes else (int(data["hidden_layers"]) if "hidden_layers" in keys else 1)
 
             model = cls(
                 input_size=input_size,
                 hidden_size=hidden_size,
                 hidden_layers=hidden_layers,
+                hidden_sizes=hidden_sizes,
                 output_size=output_size,
                 backend=backend,
             )
